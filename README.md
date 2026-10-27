@@ -8,14 +8,14 @@ Page du projet : [arkedia3d.github.io/arkedia-skp-bridge](https://arkedia3d.git
 ![Windows 64 bits](https://img.shields.io/badge/Windows-64%20bits-0078d4)
 ![Licence GPL-3.0 ou ultérieure](https://img.shields.io/badge/licence-GPL--3.0--ou%20ult%C3%A9rieure-blue)
 
-| Dans Blender, après import | Dans SketchUp pour le web, après export |
+| Dans Blender, après import | Dans SketchUp 2027, après export |
 |---|---|
-| ![Maison d'essai importée dans Blender](docs/img/blender-maison-importee.jpg) | ![La même maison ouverte dans SketchUp pour le web](docs/img/sketchup-web-maison.jpg) |
+| ![Maison d'essai importée dans Blender](docs/img/blender-maison-importee.jpg) | ![La même maison ouverte dans SketchUp 2027](docs/img/sketchup-2027-maison.jpg) |
 
-Arkedia SKP Bridge ouvre un fichier .skp dans Blender et écrit un .skp que SketchUp ouvre sans réparation. Pas de
-SketchUp à installer, pas de détour par l'OBJ ou l'IFC. L'extension tourne sur Blender 5.2 LTS, sous Windows
-64 bits. Elle est déclarée compatible avec Blender 5.1, qui embarque le même Python 3.13, mais nous ne l'avons
-essayée que sur la 5.2.3.
+Arkedia SKP Bridge ouvre un fichier .skp dans Blender et écrit un .skp que SketchUp ouvre sans réparation, dans sa
+version de bureau (essais sur SketchUp 2027) comme dans sa version web. Pas de SketchUp à installer pour s'en servir,
+pas de détour par l'OBJ ou l'IFC. L'extension tourne sur Blender 5.2 LTS, sous Windows 64 bits. Elle est déclarée
+compatible avec Blender 5.1, qui embarque le même Python 3.13, mais nous ne l'avons essayée que sur la 5.2.3.
 
 ARKEDIA 3D l'a développée pour son flux de relevé LiDAR vers la CAO et le BIM : nuage de points (E57, PLY),
 modélisation dans Blender avec Bonsai (IFC), puis livraison dans le format que le client ouvre tous les jours.
@@ -31,9 +31,11 @@ et attributs SketchUp restent lisibles dans les propriétés personnalisées (`s
 
 **À l'export**, les maillages partagés deviennent des composants, les collections (ou les niveaux IFC, ou les
 classes IFC) deviennent des calques, et les triangles coplanaires sont fusionnés en une seule face avec ses trous.
-Un mur percé de fenêtres ou une dalle trouée s'ouvrent dans SketchUp sans diagonales de triangulation. Quand le
-projet vient de Bonsai, la classe IFC, le GlobalId, le nom et les jeux de propriétés passent dans les attributs
-SketchUp. Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide près de l'origine.
+Un mur percé de fenêtres, une dalle trouée ou un sol carrelé s'ouvrent dans SketchUp sans diagonales de
+triangulation. Un terrain ou un maillage issu d'un scan reçoit des arêtes douces et s'affiche ombré au lieu de noir.
+Les longueurs s'affichent dans l'unité de la scène Blender (2,80 m au lieu de 9' 2 1/4"). Quand le projet vient de
+Bonsai, la classe IFC, le GlobalId, le nom et les jeux de propriétés passent dans les attributs SketchUp. Le fichier
+s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide près de l'origine.
 
 L'extension fonctionne dans un Blender dont l'interface est en français : elle ne cherche jamais un nœud de shader
 par son nom (traduit), seulement par son type.
@@ -58,7 +60,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.2.0.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.2.1.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -100,7 +102,10 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Textures image | Écrit les textures des matériaux (actif) |
 | Attributs (classe, GlobalId, nom IFC) | Dictionnaire d'attributs « ARKEDIA » sur chaque objet, avec les propriétés personnalisées en `custom_*` (actif) |
 | Jeux de propriétés IFC | Un dictionnaire `IFC_<jeu>` par jeu de propriétés Bonsai (actif) |
-| Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris (actif) |
+| Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
+| Adoucir les maillages denses | Arêtes douces entre faces voisines pour les objets de 2 000 faces et plus (terrain, maillage de scan). Sans elles, SketchUp trace chaque arête et le maillage paraît noir (actif) |
+| Angle d'adoucissement | 35 degrés par défaut. À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées |
+| Unités dans SketchUp | Comme la scène Blender (défaut), mètres, centimètres, millimètres ou pouces. Surfaces en m² |
 | Vue enregistrée | Perspective cadrée (défaut), isométrique cadrée, ou la vue fixe d'openskp |
 
 Les objets de type crayon gras, volume, nuage de points et cheveux ne sont pas exportés : l'export en signale le
@@ -142,8 +147,9 @@ print(stats["objects"], stats["seconds"])
 ## Performances
 
 Mesures prises en arrière-plan sur un portable Intel Core i7-11800H (8 cœurs), 15,6 Go de mémoire, Windows 11,
-Blender 5.2.3 LTS. L'export part d'une scène Blender, l'import relit le fichier produit. La mémoire est le pic de
-mémoire engagée par le processus Blender pendant l'import, démarrage de Blender compris (0,26 Go à vide).
+Blender 5.2.3 LTS, avec la version 0.2.0, le matin du 27 octobre. L'export part d'une scène Blender, l'import relit
+le fichier produit. La mémoire est le pic de mémoire engagée par le processus Blender pendant l'import, démarrage de
+Blender compris (0,26 Go à vide).
 
 | Modèle | Fichier .skp | Export | Import | Mémoire à l'import |
 |---|---:|---:|---:|---:|
@@ -168,12 +174,41 @@ Pour un fichier riche en géométrie, il faut compter de l'ordre de 30 fois la t
 l'import. Le temps d'import est dominé par la lecture du format en Python pur (la bibliothèque openskp) : entre 0,4
 et 0,7 seconde par mégaoctet de géométrie.
 
+La 0.2.1 va aussi vite que la 0.2.0. Nous avons fait tourner les deux l'une après l'autre sur la même machine, avec
+trois cas (terrain de 180 000 triangles, sphère de 327 680, terrain de 500 000) : les temps diffèrent de 3 % au
+plus (export du terrain de 500 000 triangles : 39,4 s en 0.2.0, 40,1 s en 0.2.1). Les temps absolus, eux, suivent la
+charge de la machine : l'après-midi, avec d'autres programmes ouverts, ces mêmes cas ont pris 35 à 45 % de plus que
+le matin, avec un code identique. Le tableau donne un ordre de grandeur, pas une garantie.
+
+### Dans SketchUp 2027
+
+Les fichiers exportés par la 0.2.0, ouverts dans SketchUp 2027 (version de bureau, Windows, carte graphique RTX 3050
+Ti de 4 Go). L'ouverture compte le démarrage de SketchUp. La mémoire est celle de SketchUp une fois le modèle ouvert.
+La fluidité est le nombre d'images par seconde pendant que la caméra tourne autour du modèle ; 60 est le plafond de
+l'écran.
+
+| Modèle | Ouverture | Mémoire de SketchUp | Images par seconde |
+|---|---:|---:|---:|
+| Maison d'essai | 16 s | 0,6 Go | 62 |
+| Terrain bruité de 500 000 triangles (89 Mo) | 75 s au plus | 1,4 Go | 60 |
+| 100 000 chaises, un seul composant | 11 s | 0,7 Go | 15 |
+| 20 000 groupes distincts | 11 s | 1,0 Go | 10 |
+
+Dans ces essais, beaucoup d'objets pèsent plus à l'écran que beaucoup de triangles dans un seul objet : le terrain de
+500 000 triangles tourne à 60 images par seconde, les 20 000 groupes de 6 faces à 10. L'adoucissement de la 0.2.1
+ne change ni le nombre de faces ni la taille du fichier (écart de 0,2 %). Nous n'avons pas de mesure fiable de son
+effet sur la fluidité : SketchUp cale l'affichage sur 60 ou sur 30 images par seconde selon qu'une image tient ou non
+dans 16,7 ms, ce qui masque les petites différences.
+
 ## Fidélité
 
 Chaque cas de charge construit une scène, mesure sa surface totale, son volume, sa boîte englobante et son nombre
-de triangles, exporte en .skp, relit le fichier dans un second processus Blender et compare. Sur les 17 cas,
-la surface relue est égale à l'originale à 1e-7 près (écart maximal mesuré : 6e-8) et la boîte englobante est
-identique au dixième de millimètre. Le modèle relu, réexporté puis relu une deuxième fois reste identique :
+de triangles, exporte en .skp, relit le fichier dans un second processus Blender et compare. Sur les 21 cas de la
+série finale, la surface relue est égale à l'originale à 1e-7 près (écart maximal mesuré : 5e-8) et la boîte
+englobante est identique au dixième de millimètre. Le 22e cas, le terrain de 500 000 triangles, s'exporte sans
+erreur ; sa relecture automatique a été refusée ce jour-là par le contrôle de mémoire (4,2 Go libres), et nous
+l'avons relu à part, sans ce contrôle, pour la comparaison avec SketchUp décrite plus bas. Là où nous l'avons vérifié
+(2 000 murs, 30 000 chaises, une sphère), le modèle relu, réexporté puis relu une deuxième fois reste identique :
 l'aller-retour ne dérive pas.
 
 Sur la maison d'essai, chaque unité (mur, dalle, toiture, vitrage, chaise normale, tournée et en miroir…) est
@@ -183,15 +218,31 @@ miroir mal rendu) laisse la surface et le volume totaux inchangés.
 
 Les cas de charge couvrent aussi les situations qui cassent d'ordinaire un exporteur : faces dégénérées, sommets
 confondus, quadrilatères gauchis, trois faces sur une même arête, échelles négatives, parentés à cisaillement, objet
-à 6 700 km de l'origine, scène en millimètres, modificateurs, noms accentués, japonais, emoji ou de 300 caractères,
+à 6 700 km de l'origine, scène en millimètres, modificateurs, noms accentués, japonais, emoji ou de 300 caractères,
 propriétés personnalisées très longues, collections instanciées.
 
-La maison d'essai exportée a été ouverte dans SketchUp pour le web et examinée à l'écran : matériaux, textures,
-calques, composants (vitrages, chaises), toit et murs sans diagonales.
+Les copies enregistrées par SketchUp 2027 ont aussi été relues dans Blender et comparées à l'original : six
+modèles de 85 Ko à 89 Mo, dont trois réenregistrés dans cinq versions du format (2013, 2017, 2020, 2021, 2027).
+Même surface, même nombre de triangles, même boîte englobante, même volume (écart maximal de 4e-5, sur le terrain
+de 500 000 triangles). Ce contrôle a révélé un défaut de la 0.2.0, corrigé dans la 0.2.1 : les fichiers de
+SketchUp 2021 et suivants arrivaient dans Blender avec des faces retournées (22 % de celles de la maison d'essai).
 
-| La terrasse et ses chaises | Une chaise de près |
+La maison d'essai exportée a été ouverte dans SketchUp pour le web, puis dans SketchUp 2027, et examinée à l'écran :
+matériaux, textures, calques, composants (vitrages, chaises), toit et murs sans diagonales. La 0.2.1 règle aussi le
+cas des surfaces texturées : la terrasse carrelée n'est plus coupée par une diagonale.
+
+| Version 0.2.0 : la triangulation du sol se voit | Version 0.2.1 : une seule face texturée |
 |---|---|
-| ![Terrasse dans SketchUp pour le web](docs/img/sketchup-web-terrasse.jpg) | ![Chaise dans SketchUp pour le web](docs/img/sketchup-web-chaise-detail.jpg) |
+| ![Terrasse exportée par la 0.2.0, ouverte dans SketchUp 2027](docs/img/sketchup-2027-terrasse-020.jpg) | ![Terrasse exportée par la 0.2.1, ouverte dans SketchUp 2027](docs/img/sketchup-2027-terrasse-021.jpg) |
+
+Dans SketchUp, un maillage dense dont toutes les arêtes sont tracées paraît noir. L'adoucissement (actif par
+défaut) rend ces arêtes douces tant que deux faces voisines s'écartent de moins de 35 degrés. Sur un relief d'essai
+de 125 000 triangles bruité de 15 cm, les arêtes restantes sont celles du talus et des bruits les plus vifs ; relever
+l'angle à 55 degrés les adoucit presque toutes.
+
+| Relief d'essai, arêtes tracées (0.2.0) | Même relief, adouci à 35 degrés (0.2.1) |
+|---|---|
+| ![Terrain exporté sans adoucissement, ouvert dans SketchUp 2027](docs/img/sketchup-terrain-aretes.jpg) | ![Terrain exporté avec adoucissement, ouvert dans SketchUp 2027](docs/img/sketchup-terrain-adouci.jpg) |
 
 ## Les essais
 
@@ -208,20 +259,25 @@ python tests\summarize.py resultats
 - Windows 64 bits seulement pour l'instant. Les bibliothèques compilées jointes (shapely, mapbox_earcut) sont celles
   de Windows et de Python 3.13, la version de Blender 5.1 et 5.2. Un portage Linux ou macOS demande d'ajouter les
   roues correspondantes au dossier `wheels/` et de compléter `platforms` dans le manifeste.
-- Les surfaces texturées gardent leur triangulation : les diagonales y restent visibles dans SketchUp. Les surfaces
-  unies, elles, sont fusionnées.
+- Une surface texturée garde ses triangles quand sa texture ne se déroule pas d'un seul tenant (îlots de dépliage
+  séparés, miroirs, coutures) : les diagonales y restent visibles dans SketchUp. Les surfaces unies et les surfaces à
+  texture continue sont fusionnées.
 - Une collection instanciée dans Blender s'exporte comme un seul composant (tous ses objets réunis dans la
   définition), pas comme une hiérarchie de sous-composants.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de
   milliers d'objets est lent : c'est le comportement de Blender.
-- Les gros fichiers du banc de charge (jusqu'à 85 Mo) ont été relus dans Blender, pas dans SketchUp. Leur confort
-  d'affichage dans SketchUp reste à vérifier.
-- Les fichiers écrits sont au format SketchUp 2017, que les versions plus récentes savent ouvrir. L'ouverture a
-  été vérifiée dans SketchUp pour le web, pas encore dans SketchUp Desktop.
+- Dans SketchUp, beaucoup d'objets pèsent plus qu'un maillage dense : 100 000 chaises tournent à 15 images par
+  seconde et 20 000 groupes à 10 (carte RTX 3050 Ti, voir Performances).
+- Les fichiers écrits sont au format SketchUp 2017, que les versions plus récentes savent ouvrir. SketchUp 2027
+  affiche à l'ouverture un message d'information (« Version de ce fichier : 17.0.1 ») et marque le modèle comme
+  modifié ; un enregistrement le fait passer au format récent. Les versions de bureau antérieures à 2027 n'ont pas
+  été essayées.
 - La lecture des fichiers SketchUp 2021 et suivants (nouveau conteneur) repose sur openskp. Nos essais ont porté sur
-  des fichiers produits par l'extension et sur des fichiers enregistrés par SketchUp en version 26.1.
+  des fichiers produits par l'extension, des fichiers enregistrés par SketchUp en version 26.1 et des copies
+  enregistrées par SketchUp 2027. Un fichier réel d'architecte peut contenir des cas que nous n'avons pas rencontrés :
+  en cas de défaut, joindre le fichier à une Issue (sans données confidentielles).
 
 ## Crédits et licence
 

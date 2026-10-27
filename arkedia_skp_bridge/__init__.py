@@ -35,7 +35,7 @@ import time
 
 import bpy
 import mathutils
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 M_PER_INCH = 0.0254
@@ -131,9 +131,21 @@ def _gltf_matrix_to_blender(m):
 
 def _material_name_lookup(model):
     """Table (r, g, b, alpha%) -> nom SketchUp. openskp n'expose pas le nom
-    des matériaux dans la scène instanciée ; on le retrouve par la couleur."""
+    des matériaux dans la scène instanciée ; on le retrouve par la couleur.
+
+    Les fichiers SketchUp 2021 et suivants listent en plus une matière « Layer_<étiquette> » par étiquette : c'est la
+    couleur d'étiquette que prennent les faces sans peinture. Ce n'est pas une matière de l'utilisateur : la garder
+    ferait passer le verso non peint d'une face pour « nommé », et `_back_face_drops` écarterait alors au hasard le
+    recto ou le verso (la moitié des faces d'un mur ressortaient retournées)."""
+    layer_materials = set()
+    for layer in getattr(model, "layers", []) or []:
+        layer_name = getattr(layer, "name", None)
+        if layer_name:
+            layer_materials.add("Layer_" + str(layer_name))
     lookup = {}
     for m in getattr(model, "materials", []) or []:
+        if getattr(m, "name", None) in layer_materials:
+            continue
         try:
             r, g, b = m.color[0], m.color[1], m.color[2]
             alpha = int(round(float(m.transparency) * 100))
@@ -1328,7 +1340,36 @@ def _drop_collinear(ring, flags):
     return [ring[i] for i in np.nonzero(keep)[0].tolist()]
 
 
-def _coplanar_groups(A, pts, k, skip_slots, planar, tol, exclude=None):
+_UV_FIT_TOL = 2e-3  # écart maximal (en répétitions d'image) entre les UV de Blender et une projection plane unique
+
+
+def _uv_pins(xy, uv_loops, pos_loops, c0, u, v, k):
+    """Trois points de calage (point en pouces, UV) qui reproduisent les UV de Blender sur une région plane.
+
+    Les UV de tous les coins de la région doivent suivre une même fonction affine de la position dans le plan
+    (u = a + b·x + c·y, idem pour v) : c'est le cas d'une dalle ou d'un mur déroulé d'un seul tenant. Sinon
+    (îlots d'UV décalés, miroirs, coutures) la région ne peut pas devenir une seule face texturée : renvoie None.
+    """
+    import numpy as np
+
+    M = np.column_stack([np.ones(len(pos_loops)), pos_loops[:, 0], pos_loops[:, 1]])
+    uv64 = uv_loops.astype(np.float64)
+    sol, *_ = np.linalg.lstsq(M, uv64, rcond=None)
+    if float(np.abs(M @ sol - uv64).max()) > _UV_FIT_TOL:
+        return None
+    (x0, y0), (x1, y1) = xy.min(axis=0), xy.max(axis=0)
+    if x1 - x0 < 1e-9 or y1 - y0 < 1e-9:
+        return None
+    pins = []
+    for x, y in ((x0, y0), (x1, y0), (x0, y1)):
+        w = c0 + x * u + y * v
+        t = sol[0] + sol[1] * x + sol[2] * y
+        pins.append(((round(float(w[0]) * k, 6), round(float(w[1]) * k, 6), round(float(w[2]) * k, 6)),
+                     (float(t[0]), float(t[1]))))
+    return pins
+
+
+def _coplanar_groups(A, pts, k, skip_slots, planar, tol, exclude=None, uv=None, uv_slots=frozenset()):
     """Regroupe les polygones voisins, coplanaires et de même matériau en faces SketchUp.
 
     Un maillage IFC sort de Bonsai en triangles : sans cette étape, SketchUp affiche une
@@ -1337,7 +1378,10 @@ def _coplanar_groups(A, pts, k, skip_slots, planar, tol, exclude=None):
     comme dans un modèle dessiné à la main. Les sommets alignés qui n'appartiennent qu'à la
     région (bord libre d'une dalle, contour d'un trou) sont supprimés.
 
-    Renvoie une liste de dictionnaires {members, mat, smooth, faces:[(extérieur, [trous])]},
+    Pour un matériau texturé (`uv_slots`, avec les UV par coin `uv`), la région n'est fusionnée que si ses UV
+    suivent une seule projection plane ; la face reçoit alors trois points de calage qui la reproduisent.
+
+    Renvoie une liste de dictionnaires {members, mat, smooth, faces:[(extérieur, [trous])], uv_pins},
     les points étant en pouces et repris tels quels de `pts` (partage exact des sommets).
     Les polygones non fusionnables restent à la charge de l'appelant.
     """
@@ -1427,6 +1471,12 @@ def _coplanar_groups(A, pts, k, skip_slots, planar, tol, exclude=None):
             u /= np.linalg.norm(u)
             v = np.cross(n, u)
             xy = np.stack([rel @ u, rel @ v], axis=1)
+            pins = None
+            if uv is not None and int(mat[members[0]]) in uv_slots:
+                loops = np.concatenate([np.arange(lstart[p], lstart[p] + ltotal[p]) for p in members.tolist()])
+                pins = _uv_pins(xy, uv[loops], xy[np.searchsorted(allv, lv[loops])], c0, u, v, k)
+                if pins is None:
+                    continue  # UV qui ne suivent pas une projection plane unique : polygones séparés, chacun avec ses UV
             polys = [Polygon(xy[np.searchsorted(allv, vs)]) for vs in vsets]
             if not all(p.is_valid and p.area > 0 for p in polys):
                 continue
@@ -1468,7 +1518,7 @@ def _coplanar_groups(A, pts, k, skip_slots, planar, tol, exclude=None):
             if faces:
                 m0 = int(members[0])
                 result.append({"members": members.tolist(), "mat": int(mat[m0]),
-                               "smooth": bool(smooth[m0]), "faces": faces})
+                               "smooth": bool(smooth[m0]), "faces": faces, "uv_pins": pins})
         except Exception:
             continue
     return result
@@ -1508,8 +1558,41 @@ def _duplicate_polygons(A, k):
     return dup, set(kept[flipped].tolist())
 
 
-def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
-    """Écrit les polygones d'un maillage Blender (unités de la scène) dans un groupe ou un composant."""
+def _soften_mask(A, angle_deg):
+    """Polygones entourés de voisins presque coplanaires (angle entre normales ≤ `angle_deg` sur chaque arête).
+
+    Les polygones qui touchent un bord libre du maillage n'en font pas partie : leur contour reste visible.
+    """
+    import numpy as np
+
+    n_poly = A["n_poly"]
+    lp = np.repeat(np.arange(n_poly, dtype=np.int32), A["ltotal"])
+    order = np.argsort(A["le"], kind="stable")
+    le_s, lp_s = A["le"][order], lp[order]
+    idx = np.nonzero(le_s[1:] == le_s[:-1])[0]
+    a, b = lp_s[idx], lp_s[idx + 1]
+    keep = a != b
+    a, b = a[keep], b[keep]
+    if a.size == 0:
+        return np.zeros(n_poly, dtype=bool)
+    cosang = np.einsum("ij,ij->i", A["nrm"][a], A["nrm"][b])
+    ang = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+    worst = np.zeros(n_poly)
+    np.maximum.at(worst, a, ang)
+    np.maximum.at(worst, b, ang)
+    shared = np.bincount(np.concatenate([a, b]), minlength=n_poly)
+    return (shared >= A["ltotal"]) & (worst <= angle_deg)
+
+
+def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, soften=None):
+    """Écrit les polygones d'un maillage Blender (unités de la scène) dans un groupe ou un composant.
+
+    `soften` = {"angle": degrés, "min_faces": n} : les polygones d'un maillage d'au moins n faces dont tous les
+    voisins sont à moins de `angle` degrés reçoivent des arêtes douces et lisses (comme l'outil Adoucir de SketchUp).
+    Un terrain ou un maillage de scan de plusieurs centaines de milliers de triangles s'affiche ainsi ombré, et non
+    noir sous le trait des arêtes. Les polygones qui gardent des arêtes vives sont écrits en premier : une arête
+    partagée avec eux reste visible (SketchUp retient le réglage de la première face qui la crée).
+    """
     import numpy as np
 
     A = _mesh_arrays(mesh)
@@ -1573,9 +1656,12 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
             _skip_face(stats, ValueError("coordonnées non finies"), n_bad)
 
     if merge and n_poly > 1:
-        skip = {i for i, h in enumerate(handles) if h is not None and h in textured}
+        textured_slots = {i for i, h in enumerate(handles) if h is not None and h in textured}
+        # sans UV exploitables, un matériau texturé garde ses polygones séparés (rien ne dit comment l'étaler)
+        skip = set() if uv_arr is not None else textured_slots
         try:
-            groups = _coplanar_groups(A, pts, k, skip, planar, tol_bu, exclude=absorbed)
+            groups = _coplanar_groups(A, pts, k, skip, planar, tol_bu, exclude=absorbed,
+                                      uv=uv_arr, uv_slots=frozenset(textured_slots) if uv_arr is not None else frozenset())
         except Exception as exc:  # une fusion ratée ne doit jamais bloquer l'export
             groups = []
             stats["warnings"].append(f"fusion des faces coplanaires ignorée : {exc}")
@@ -1592,6 +1678,8 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
                         kw["smooth_edges"] = True
                     if holes:
                         kw["holes"] = holes
+                    if grp.get("uv_pins"):
+                        kw["front_uv"] = grp["uv_pins"]
                     target.add_face(outer, **kw)
                     written += 1
             except Exception:
@@ -1603,8 +1691,19 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
             stats["faces_merged"] = stats.get("faces_merged", 0) + len(grp["members"])
             stats["holes"] = stats.get("holes", 0) + sum(len(h) for _, h in grp["faces"])
 
+    soft_l = None
+    sequence = range(n_poly)
+    if soften and n_poly >= soften["min_faces"]:
+        dense = _soften_mask(A, soften["angle"]) & ~absorbed
+        if dense.any():
+            stats["objects_softened"] = stats.get("objects_softened", 0) + 1
+            stats["faces_softened"] = stats.get("faces_softened", 0) + int(dense.sum())
+            soft_l = dense.tolist()
+            soft_all = dense | A["smooth"]
+            sequence = np.concatenate([np.nonzero(~soft_all)[0], np.nonzero(soft_all)[0]]).tolist()
+
     bad = []
-    for p in range(n_poly):
+    for p in sequence:
         if absorbed[p]:
             continue
         if not planar[p]:
@@ -1613,7 +1712,7 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
         s, t = ls_l[p], lt_l[p]
         ring = [pts[i] for i in lv_l[s:s + t]]
         kwargs = {"material": handle_for(mat_l[p])}
-        if smooth_l[p]:
+        if smooth_l[p] or (soft_l is not None and soft_l[p]):
             kwargs["soft_edges"] = True
             kwargs["smooth_edges"] = True
         if p in flipped_keep and kwargs["material"] is not None:
@@ -1645,7 +1744,7 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True):
         for i in np.nonzero(np.isin(tp, np.unique(np.asarray(bad, dtype=np.int32))))[0].tolist():
             handle = handle_for(int(tm[i]))
             kwargs = {"material": handle}
-            if smooth_l[int(tp[i])]:
+            if smooth_l[int(tp[i])] or (soft_l is not None and soft_l[int(tp[i])]):
                 kwargs["soft_edges"] = True
                 kwargs["smooth_edges"] = True
             if uv_arr is not None and handle is not None and handle in textured:
@@ -1692,43 +1791,98 @@ _CAM_PERSPECTIVE, _CAM_FOV, _CAM_HEIGHT = 3075, 3076, 3084
 _CAM_EXPECTED = ((100.0, -100.0, 100.0), (0.0, 0.0, 0.0), (-0.40824829046386, 0.40824829046386, 0.81649658092773))
 _CAM_DIRECTION = (1.0, -1.0, 1.0)  # œil au sud-est, en hauteur : la vue « Iso » classique de SketchUp
 _CAM_FOV_DEG = 30.0
-_CAM_MARGIN = 1.15
+_CAM_MARGIN = 1.08
 _CAM_MIN_RADIUS_IN = 12.0
 
 
-def _frame_camera(data, lo, hi, mode="PERSPECTIVE"):
-    """Octets du .skp dont la caméra enregistrée cadre la boîte (lo, hi) en pouces, ou None si illisible."""
+def _frame_camera(buf, lo, hi, mode="PERSPECTIVE"):
+    """Recadre sur place (`buf` : bytearray du .skp) la caméra enregistrée sur la boîte (lo, hi) en pouces.
+
+    L'œil recule juste assez pour que les huit coins de la boîte tiennent dans l'angle de vue de 30 degrés
+    (la plus petite dimension de la fenêtre), avec 8 % de marge. Renvoie True si la caméra a été écrite.
+    """
     import struct
 
-    if len(data) < _CAM_HEIGHT + 8:
-        return None
+    if len(buf) < _CAM_HEIGHT + 8:
+        return False
     try:
-        got = tuple(struct.unpack_from("<3d", data, off) for off in (_CAM_EYE, _CAM_TARGET, _CAM_UP))
+        got = tuple(struct.unpack_from("<3d", buf, off) for off in (_CAM_EYE, _CAM_TARGET, _CAM_UP))
         if any(abs(a - b) > 1e-6 for g, e in zip(got, _CAM_EXPECTED) for a, b in zip(g, e)):
-            return None
+            return False
         if any(not math.isfinite(v) for v in tuple(lo) + tuple(hi)):
-            return None
+            return False
         center = [(a + b) / 2.0 for a, b in zip(lo, hi)]
         radius = max(math.sqrt(sum(((b - a) / 2.0) ** 2 for a, b in zip(lo, hi))), _CAM_MIN_RADIUS_IN)
         half = math.radians(_CAM_FOV_DEG / 2.0)
-        dist = _CAM_MARGIN * radius / math.sin(half)
         norm = math.sqrt(sum(c * c for c in _CAM_DIRECTION))
         view = [c / norm for c in _CAM_DIRECTION]  # de la cible vers l'œil
-        eye = [center[i] + view[i] * dist for i in range(3)]
         up = (-view[2] * view[0], -view[2] * view[1], 1.0 - view[2] * view[2])  # +Z projeté sur le plan de vue
         un = math.sqrt(sum(c * c for c in up))
         up = [c / un for c in up]
-        buf = bytearray(data)
+        fwd = [-c for c in view]
+        right = (fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0])
+        reach, dist = 0.0, 1.1 * radius
+        for cx in (lo[0], hi[0]):
+            for cy in (lo[1], hi[1]):
+                for cz in (lo[2], hi[2]):
+                    o = (cx - center[0], cy - center[1], cz - center[2])
+                    lateral = max(abs(sum(o[i] * right[i] for i in range(3))), abs(sum(o[i] * up[i] for i in range(3))))
+                    reach = max(reach, lateral)
+                    dist = max(dist, sum(o[i] * view[i] for i in range(3)) + _CAM_MARGIN * lateral / math.tan(half))
+        if mode != "PERSPECTIVE":
+            dist = max(dist, _CAM_MARGIN * radius / math.sin(half))  # œil hors du modèle : pas de coupe en vue parallèle
+        eye = [center[i] + view[i] * dist for i in range(3)]
         struct.pack_into("<3d", buf, _CAM_EYE, *eye)
         struct.pack_into("<3d", buf, _CAM_TARGET, *center)
         struct.pack_into("<3d", buf, _CAM_UP, *up)
         buf[_CAM_PERSPECTIVE] = 1 if mode == "PERSPECTIVE" else 0
         struct.pack_into("<d", buf, _CAM_FOV, _CAM_FOV_DEG)
-        height = 2.0 * dist * math.tan(half) if mode == "PERSPECTIVE" else 2.0 * _CAM_MARGIN * radius
+        height = 2.0 * dist * math.tan(half) if mode == "PERSPECTIVE" else 2.0 * _CAM_MARGIN * max(reach, _CAM_MIN_RADIUS_IN / 2.0)
         struct.pack_into("<d", buf, _CAM_HEIGHT, height)
-        return bytes(buf)
+        return True
     except Exception:
-        return None
+        return False
+
+
+# --- unités d'affichage ------------------------------------------------------------------------------
+#
+# Le gabarit d'openskp s'ouvre en pouces, format architectural : 2,80 m s'affiche « 9' 2 1/4" » et une surface en
+# pouces carrés. On réécrit donc les entiers du dictionnaire d'options « UnitsOptions » du gabarit (même longueur,
+# aucun décalage). Sens des valeurs, vérifié dans SketchUp 2027 : LengthUnit 0 pouce, 1 pied, 2 mm, 3 cm, 4 m ;
+# LengthFormat 0 décimal ; AreaUnit 0 po², 1 pied², 2 mm², 3 cm², 4 m² ; VolumeUnit 0 po³, 1 pied³, 2 mm³, 3 cm³, 4 m³.
+_UNIT_PRESETS = {
+    "METERS": {"LengthUnit": 4, "LengthFormat": 0, "LengthPrecision": 3, "AreaUnit": 4, "VolumeUnit": 4},
+    "CENTIMETERS": {"LengthUnit": 3, "LengthFormat": 0, "LengthPrecision": 1, "AreaUnit": 4, "VolumeUnit": 4},
+    "MILLIMETERS": {"LengthUnit": 2, "LengthFormat": 0, "LengthPrecision": 0, "AreaUnit": 4, "VolumeUnit": 4},
+}
+
+
+def _units_choice(context, units):
+    """Réglage d'unités à écrire : « SCENE » reprend celui de la scène Blender, « INCHES » laisse le gabarit."""
+    if units != "SCENE":
+        return units
+    settings = context.scene.unit_settings
+    if settings.system == "IMPERIAL":
+        return "INCHES"
+    return {"MILLIMETERS": "MILLIMETERS", "CENTIMETERS": "CENTIMETERS"}.get(settings.length_unit, "METERS")
+
+
+def _set_units(buf, preset):
+    """Écrit sur place (`buf` : bytearray du .skp) les unités d'affichage du réglage `preset`. Renvoie True si fait."""
+    values = _UNIT_PRESETS.get(preset)
+    if not values:
+        return False
+    head = 16384  # le dictionnaire d'options est au début du fichier, dans la partie reprise du gabarit
+    spots = []
+    for key in values:
+        tag = bytes([len(key)]) + key.encode("utf-16-le") + b"\x04"
+        at = buf.find(tag, 0, head)
+        if at < 0 or buf.find(tag, at + 1, head) >= 0 or at + len(tag) + 4 > len(buf):
+            return False  # gabarit inattendu : on ne touche à rien
+        spots.append((at + len(tag), values[key]))
+    for pos, value in spots:
+        buf[pos:pos + 4] = int(value).to_bytes(4, "little")
+    return True
 
 
 def _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers):
@@ -1781,13 +1935,19 @@ def export_skp(filepath, context, *args, **options):
     return stats
 
 
+_SOFTEN_ANGLE_DEG = 35.0
+_SOFTEN_MIN_FACES = 2000
+
+
 def _export_skp_impl(filepath, context, only_selected=True, use_components=True, use_modifiers=True,
                      layer_mode="COLLECTION", use_textures=True, store_attributes=True, export_psets=True,
-                     merge_planar=True, view_mode="PERSPECTIVE"):
+                     merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
+                     soften_angle=_SOFTEN_ANGLE_DEG):
     from openskp import create
 
     t0 = time.time()
     k = _scene_k(context)
+    soften = {"angle": min(89.0, max(1.0, float(soften_angle))), "min_faces": _SOFTEN_MIN_FACES} if soften_dense else None
     depsgraph = context.evaluated_depsgraph_get()
 
     candidates = context.selected_objects if (only_selected and context.selected_objects) else context.scene.objects
@@ -1934,7 +2094,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 holder, mesh = evaluated_mesh(obj)
                 try:
                     with builder.add_component_definition(_su(obj.data.name)) as cd:
-                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar)
+                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
                     definitions[key] = cd
                     stats["components"] += 1
                 finally:
@@ -1955,7 +2115,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                             mesh.transform(mtx)
                             if mtx.determinant() < 0:
                                 mesh.flip_normals()
-                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar)
+                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar, soften)
                             wrote += 1
                         finally:
                             holder.to_mesh_clear()
@@ -1986,7 +2146,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 trans, m3 = transform_args(obj)
                 kw = attribute_kwargs(obj)
                 with builder.add_group(_su(obj.name), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
-                    _write_mesh(grp, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar)
+                    _write_mesh(grp, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
                 stats["groups"] += 1
                 stats["objects"] += 1
             finally:
@@ -2013,18 +2173,25 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
             stats["collection_instances"] += 1
             stats["objects"] += 1
 
-        data = builder.to_bytes()
+        data = bytearray(builder.to_bytes())
         stats["view"] = "openskp"
         if view_mode in ("PERSPECTIVE", "PARALLEL"):
             bounds = _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers)
-            framed = _frame_camera(data, bounds[0] * k, bounds[1] * k, view_mode) if bounds is not None else None
-            if framed is not None:
-                data = framed
+            if bounds is not None and _frame_camera(data, bounds[0] * k, bounds[1] * k, view_mode):
                 stats["view"] = view_mode.lower()
             else:
                 stats["warnings"].append(
                     "vue enregistrée non recadrée (boîte englobante ou gabarit openskp inattendus) : "
                     "dans SketchUp, utiliser Caméra > Zoom étendu si le modèle semble coupé")
+        preset = _units_choice(context, units)
+        stats["units"] = "gabarit (pouces)"
+        if preset in _UNIT_PRESETS:
+            if _set_units(data, preset):
+                stats["units"] = preset.lower()
+            else:
+                stats["warnings"].append(
+                    "unités d'affichage non écrites (gabarit openskp inattendu) : le fichier s'ouvre en pouces, "
+                    "à régler dans SketchUp (Fenêtre > Infos du modèle > Unités)")
         part = filepath + ".part"
         try:
             with open(part, "wb") as f:
@@ -2161,6 +2328,35 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         description="Une face SketchUp par surface plane (avec ses trous), au lieu d'un triangle par maille",
         default=True,
     )
+    soften_dense: BoolProperty(
+        name="Adoucir les maillages denses",
+        description=(
+            "Pour les objets de 2 000 faces et plus (terrain, maillage de scan) : arêtes douces et lisses entre faces "
+            "voisines à moins de 35 degrés, comme l'outil Adoucir de SketchUp. Sans cela SketchUp dessine chaque "
+            "arête et un grand maillage paraît noir"
+        ),
+        default=True,
+    )
+    soften_angle: FloatProperty(
+        name="Angle d'adoucissement (degrés)",
+        description=(
+            "Deux faces voisines dont les normales diffèrent de moins que cet angle partagent une arête douce. "
+            "À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées"
+        ),
+        default=35.0, min=1.0, max=89.0,
+    )
+    units: EnumProperty(
+        name="Unités dans SketchUp",
+        description="Unités d'affichage du fichier. Le gabarit d'openskp s'ouvre en pouces, format architectural",
+        items=[
+            ("SCENE", "Comme la scène Blender", "Mètres, centimètres ou millimètres selon les unités de la scène"),
+            ("METERS", "Mètres", "Longueurs en mètres (2,800 m), surfaces en m²"),
+            ("CENTIMETERS", "Centimètres", "Longueurs en centimètres (280,0 cm), surfaces en m²"),
+            ("MILLIMETERS", "Millimètres", "Longueurs en millimètres (2800 mm), surfaces en m²"),
+            ("INCHES", "Pouces", "Réglage du gabarit : pouces, format architectural"),
+        ],
+        default="SCENE",
+    )
     view_mode: EnumProperty(
         name="Vue enregistrée",
         description="Caméra avec laquelle le fichier s'ouvre dans SketchUp",
@@ -2179,6 +2375,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 use_modifiers=self.use_modifiers, layer_mode=self.layer_mode, use_textures=self.use_textures,
                 store_attributes=self.store_attributes, export_psets=self.export_psets,
                 merge_planar=self.merge_planar, view_mode=self.view_mode,
+                soften_dense=self.soften_dense, soften_angle=self.soften_angle, units=self.units,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -2189,6 +2386,12 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
             f"({s['instances']} instances), {s['faces']} faces ({s['faces_merged']} polygones fusionnés, "
             f"{s['holes']} trous), {s['materials']} matériaux, {s['layers']} calques",
         )
+        if s.get("objects_softened"):
+            self.report(
+                {"INFO"},
+                f"{s['objects_softened']} maillage(s) dense(s) adouci(s) ({s['faces_softened']} faces) : "
+                f"arêtes douces entre faces voisines à moins de {self.soften_angle:g} degrés",
+            )
         for w in s["warnings"]:
             self.report({"WARNING"}, w)
         return {"FINISHED"}

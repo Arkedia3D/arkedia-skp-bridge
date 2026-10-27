@@ -7,7 +7,7 @@
       "id": "arkedia_skp_bridge",
       "name": "Arkedia SKP Bridge",
       "tagline": "Import/export SketchUp (.skp) pour le flux scan vers CAO/BIM",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "type": "add-on",
       "maintainer": "ARKEDIA 3D <contact@arkedia3d.ci>",
       "license": [
@@ -27,9 +27,9 @@
       "python_versions": [
         "3.13"
       ],
-      "archive_url": "./arkedia_skp_bridge-0.2.0.zip",
-      "archive_size": 2333552,
-      "archive_hash": "sha256:b6861c4c2a4d1ec37462cd90e41b718a842b0bd7be0d2263661b9bbd834f3cf2"
+      "archive_url": "./arkedia_skp_bridge-0.2.1.zip",
+      "archive_size": 2337058,
+      "archive_hash": "sha256:6140cd835048810e5baec6975650e3b2d79f9f38d33b62920d8c4a9846c8468e"
     }
   ]
 }

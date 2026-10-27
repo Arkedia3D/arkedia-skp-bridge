@@ -7,8 +7,13 @@
 <meta name="description" content="Extension Blender gratuite et libre qui lit et écrit les fichiers SketchUp (.skp) sans installer SketchUp. Composants partagés, calques, matériaux, attributs IFC. Par ARKEDIA 3D.">
 <meta name="theme-color" content="#050D1A">
 <meta property="og:title" content="Arkedia SKP Bridge : SketchUp dans Blender, sans SketchUp">
-<meta property="og:description" content="Import et export .skp pour Blender 5.2 LTS. Gratuit, libre, testé de 7 Ko à 85 Mo et jusqu'à 100 000 composants.">
+<meta property="og:description" content="Import et export .skp pour Blender 5.2 LTS. Gratuit, libre, testé de 7 Ko à 85 Mo et jusqu'à 100 000 composants, ouvert dans SketchUp 2027.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://arkedia3d.github.io/arkedia-skp-bridge/">
+<meta property="og:image" content="https://arkedia3d.github.io/arkedia-skp-bridge/img/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -211,7 +216,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
         <li><a href="#limites">Limites</a></li>
       </ul>
     </nav>
-    <a class="bouton cta petit" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger</a>
+    <a class="bouton cta petit" href="extensions/arkedia_skp_bridge-0.2.1.zip" download>Télécharger</a>
   </div>
 </header>
 
@@ -222,9 +227,9 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
       <div>
         <span class="label">Extension Blender, gratuite et libre</span>
         <h1>Livrez du SketchUp depuis Blender.</h1>
-        <p class="chapo">Arkedia SKP Bridge lit et écrit les fichiers .skp directement dans Blender 5.2 LTS. Aucun SketchUp à installer, aucun détour par l'OBJ ou l'IFC. Un composant placé 100&nbsp;000 fois reste un seul maillage, un mur percé de fenêtres s'ouvre sans diagonales, et la classe IFC suit dans les attributs.</p>
+        <p class="chapo">Arkedia SKP Bridge lit et écrit les fichiers .skp directement dans Blender 5.2 LTS. Aucun SketchUp à installer, aucun détour par l'OBJ ou l'IFC. Un composant placé 100&nbsp;000 fois reste un seul maillage, un mur percé de fenêtres ou un sol carrelé s'ouvrent sans diagonales, et la classe IFC suit dans les attributs. Les fichiers exportés s'ouvrent dans SketchUp 2027 comme dans SketchUp pour le web.</p>
         <div class="actions">
-          <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger la version 0.2.0</a>
+          <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.1.zip" download>Télécharger la version 0.2.1</a>
           <a class="bouton fantome" href="#installation">Installer par le dépôt</a>
           <a class="bouton fantome" data-repo href="https://github.com/">Voir le code</a>
         </div>
@@ -236,17 +241,17 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
           <figcaption><b>Blender</b><span>Import du fichier .skp</span></figcaption>
         </figure>
         <figure class="vignette">
-          <img src="img/sketchup-web-maison.jpg" width="800" height="600" alt="La même maison ouverte dans SketchUp pour le web après export depuis Blender">
-          <figcaption><b>SketchUp pour le web</b><span>Export depuis Blender</span></figcaption>
+          <img src="img/sketchup-2027-maison.jpg" width="1200" height="750" alt="La même maison ouverte dans SketchUp 2027 après export depuis Blender">
+          <figcaption><b>SketchUp 2027</b><span>Export depuis Blender</span></figcaption>
         </figure>
       </div>
     </div>
 
     <div class="chiffres" role="list">
       <div class="chiffre" role="listitem"><strong>0</strong><span>SketchUp à installer, ni compte, ni licence</span></div>
-      <div class="chiffre" role="listitem"><strong>100&nbsp;000</strong><span>composants exportés en 11&nbsp;secondes</span></div>
-      <div class="chiffre" role="listitem"><strong>85&nbsp;Mo</strong><span>de géométrie (500&nbsp;000 triangles) importés en 49&nbsp;secondes</span></div>
-      <div class="chiffre" role="listitem"><strong>17 sur 17</strong><span>cas de charge fidèles à l'original après aller-retour</span></div>
+      <div class="chiffre" role="listitem"><strong>100&nbsp;000</strong><span>composants exportés en 11 à 14&nbsp;secondes</span></div>
+      <div class="chiffre" role="listitem"><strong>85&nbsp;Mo</strong><span>de géométrie (500&nbsp;000 triangles) importés en 49 à 66&nbsp;secondes</span></div>
+      <div class="chiffre" role="listitem"><strong>21 cas</strong><span>de charge relus après aller-retour, surface fidèle à l'original à 1e-7 près</span></div>
     </div>
   </div>
 </section>
@@ -266,6 +271,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
           <li>Étiquettes en collections, scènes en caméras, hiérarchie des groupes conservée.</li>
           <li>Matériaux nommés, textures, couleurs converties en linéaire.</li>
           <li>GUID et attributs SketchUp lisibles dans les propriétés personnalisées.</li>
+          <li>Lecture des deux générations de fichiers SketchUp, de 2013 à 2020 puis 2021 et suivants, sans face retournée.</li>
           <li>Un contrôle de mémoire refuse un fichier trop lourd avant que Blender ne fige l'ordinateur.</li>
         </ul>
       </article>
@@ -273,9 +279,10 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
         <h3>À l'export</h3>
         <ul>
           <li>Groupes et composants natifs, calques par collection, niveau IFC ou classe IFC.</li>
-          <li>Triangles coplanaires fusionnés en une face avec ses trous&nbsp;: murs et toits unis sans diagonales.</li>
+          <li>Triangles coplanaires fusionnés en une face avec ses trous&nbsp;: murs, toits et sols carrelés sans diagonales.</li>
+          <li>Terrains et maillages de scan adoucis&nbsp;: surface ombrée au lieu de noire.</li>
           <li>Depuis Bonsai&nbsp;: classe IFC, GlobalId, nom et jeux de propriétés dans les attributs SketchUp.</li>
-          <li>Matériaux, transparence et textures, modificateurs appliqués, unités de la scène respectées.</li>
+          <li>Matériaux, transparence et textures, modificateurs appliqués, unités de la scène respectées (2,80&nbsp;m au lieu de 9' 2 1/4").</li>
           <li>Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle.</li>
         </ul>
       </article>
@@ -322,7 +329,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
           <li>Dans Préférences, Obtenir des extensions&nbsp;: menu déroulant en haut à droite, «&nbsp;Install from Disk&nbsp;» (libellé non traduit).</li>
           <li>Ou glisser le zip sur la fenêtre de Blender.</li>
         </ol>
-        <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>arkedia_skp_bridge-0.2.0.zip</a>
+        <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.1.zip" download>arkedia_skp_bridge-0.2.1.zip</a>
       </article>
     </div>
     <p class="note" style="margin-top:22px">Ensuite, Fichier, Importer et Fichier, Exporter proposent «&nbsp;SketchUp Arkedia (.skp)&nbsp;». Un fichier d'exemple, la maison ci-dessus, est dans le dépôt&nbsp;: <code>exemples/maison_test.skp</code>.</p>
@@ -334,7 +341,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
     <div class="titre-section">
       <span class="label">Performances</span>
       <h2>De la petite maison au chantier de 100&nbsp;000 pièces.</h2>
-      <p>Mesures prises en arrière-plan sur un portable Intel Core i7-11800H (8 cœurs), 15,6&nbsp;Go de mémoire, Windows 11, Blender 5.2.3 LTS. L'export part d'une scène Blender, l'import relit le fichier produit.</p>
+      <p>Mesures prises en arrière-plan sur un portable Intel Core i7-11800H (8 cœurs), 15,6&nbsp;Go de mémoire, Windows 11, Blender 5.2.3 LTS, avec la version 0.2.0, le matin du 27 octobre. L'export part d'une scène Blender, l'import relit le fichier produit.</p>
     </div>
     <div class="tableau">
       <table>
@@ -356,6 +363,27 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
       </table>
     </div>
     <p class="note">La mémoire est le pic de mémoire engagée par Blender, démarrage compris (0,26&nbsp;Go). Pour un fichier riche en géométrie, il faut compter environ 30 fois sa taille. Le temps d'import va de 0,4 à 0,7 seconde par mégaoctet de géométrie&nbsp;: la lecture du format se fait en Python pur.</p>
+    <p class="note">La 0.2.1 va aussi vite que la 0.2.0&nbsp;: lancées l'une après l'autre sur la même machine, avec trois cas (terrain de 180&nbsp;000 triangles, sphère de 327&nbsp;680, terrain de 500&nbsp;000), elles diffèrent de 3&nbsp;% au plus. Les temps absolus suivent la charge de la machine&nbsp;: l'après-midi, avec d'autres programmes ouverts, ces mêmes cas ont pris 35 à 45&nbsp;% de plus que le matin. Le tableau donne un ordre de grandeur, pas une garantie.</p>
+
+    <div class="titre-section" style="margin-top:56px">
+      <span class="label">Dans SketchUp 2027</span>
+      <h3 style="font-size:1.6rem">Les mêmes fichiers, ouverts dans SketchUp.</h3>
+      <p>Fichiers exportés par la 0.2.0, ouverts dans SketchUp 2027 (version de bureau, Windows, carte graphique RTX 3050 Ti de 4&nbsp;Go). L'ouverture compte le démarrage de SketchUp. La fluidité est le nombre d'images par seconde pendant que la caméra tourne autour du modèle&nbsp;; 60 est le plafond de l'écran.</p>
+    </div>
+    <div class="tableau">
+      <table>
+        <thead>
+          <tr><th>Modèle</th><th class="num">Ouverture</th><th class="num">Mémoire de SketchUp</th><th class="num">Images par seconde</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Maison d'essai</td><td class="num">16&nbsp;s</td><td class="num">0,6&nbsp;Go</td><td class="num">62</td></tr>
+          <tr><td>Terrain bruité de 500&nbsp;000 triangles (89&nbsp;Mo)</td><td class="num">75&nbsp;s au plus</td><td class="num">1,4&nbsp;Go</td><td class="num">60</td></tr>
+          <tr><td>100&nbsp;000 chaises, un seul composant</td><td class="num">11&nbsp;s</td><td class="num">0,7&nbsp;Go</td><td class="num">15</td></tr>
+          <tr><td>20&nbsp;000 groupes distincts</td><td class="num">11&nbsp;s</td><td class="num">1,0&nbsp;Go</td><td class="num">10</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Dans ces essais, beaucoup d'objets pèsent plus à l'écran que beaucoup de triangles dans un seul objet. L'adoucissement de la 0.2.1 ne change ni le nombre de faces ni la taille du fichier (écart de 0,2&nbsp;%). Nous n'avons pas de mesure fiable de son effet sur la fluidité&nbsp;: SketchUp cale l'affichage sur 60 ou sur 30 images par seconde selon qu'une image tient ou non dans 16,7&nbsp;ms, ce qui masque les petites différences.</p>
   </div>
 </section>
 
@@ -364,7 +392,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
     <div class="titre-section">
       <span class="label">Fidélité</span>
       <h2>Ce qui sort de Blender revient identique.</h2>
-      <p>Chaque cas de charge mesure la surface, le volume, la boîte englobante et le nombre de triangles de la scène, l'exporte, relit le fichier dans un second Blender et compare. Sur les 17 cas, l'écart de surface reste sous 1e-7 et la boîte englobante sous 0,1&nbsp;mm. Réexporté et relu une deuxième fois, le modèle ne dérive pas.</p>
+      <p>Chaque cas de charge mesure la surface, le volume, la boîte englobante et le nombre de triangles de la scène, l'exporte, relit le fichier dans un second Blender et compare. Sur les 21 cas de la série finale, l'écart de surface reste sous 1e-7 et la boîte englobante sous 0,1&nbsp;mm. Le 22e, un terrain de 500&nbsp;000 triangles, s'exporte sans erreur&nbsp;; sa relecture automatique a été refusée ce jour-là par le contrôle de mémoire (4,2&nbsp;Go libres), et nous l'avons relu à part. Là où nous l'avons vérifié, réexporté et relu une deuxième fois, le modèle ne dérive pas.</p>
     </div>
     <div class="deux">
       <article class="carte">
@@ -376,9 +404,17 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
         <p>Faces dégénérées, sommets confondus, quadrilatères gauchis, trois faces sur une arête, échelles négatives, parentés cisaillées, objet à 6&nbsp;700&nbsp;km de l'origine, scène en millimètres, modificateurs, noms accentués, japonais ou de 300 caractères, collections instanciées&nbsp;: tous passent.</p>
       </article>
     </div>
+    <article class="carte" style="margin-top:18px">
+      <h3>Après un passage par SketchUp 2027</h3>
+      <p>Les copies enregistrées par SketchUp 2027 ont été relues dans Blender et comparées à l'original&nbsp;: six modèles de 85&nbsp;Ko à 89&nbsp;Mo, dont trois réenregistrés dans cinq versions du format (2013, 2017, 2020, 2021, 2027). Même surface, même nombre de triangles, même boîte englobante, même volume (4e-5 au plus, sur le terrain de 500&nbsp;000 triangles). Ce contrôle a révélé un défaut de la 0.2.0, corrigé dans la 0.2.1&nbsp;: les fichiers de SketchUp 2021 et suivants arrivaient dans Blender avec des faces retournées, 22&nbsp;% de celles de la maison d'essai.</p>
+    </article>
     <div class="captures">
-      <figure class="vignette"><img src="img/sketchup-web-terrasse.jpg" width="800" height="600" loading="lazy" alt="La terrasse carrelée et ses chaises dans SketchUp pour le web"><figcaption><b>La terrasse</b><span>Textures, composants, calques</span></figcaption></figure>
-      <figure class="vignette"><img src="img/sketchup-web-chaise-detail.jpg" width="800" height="600" loading="lazy" alt="Une chaise vue de près dans SketchUp pour le web"><figcaption><b>Une chaise de près</b><span>Matériaux et accoudoir</span></figcaption></figure>
+      <figure class="vignette"><img src="img/sketchup-2027-terrasse-020.jpg" width="795" height="585" loading="lazy" alt="La terrasse exportée par la version 0.2.0, ouverte dans SketchUp 2027, avec une diagonale de triangulation"><figcaption><b>Version 0.2.0</b><span>La triangulation du sol se voit</span></figcaption></figure>
+      <figure class="vignette"><img src="img/sketchup-2027-terrasse-021.jpg" width="795" height="585" loading="lazy" alt="La terrasse exportée par la version 0.2.1, ouverte dans SketchUp 2027, en une seule face"><figcaption><b>Version 0.2.1</b><span>Une seule face texturée</span></figcaption></figure>
+    </div>
+    <div class="captures">
+      <figure class="vignette"><img src="img/sketchup-terrain-aretes.jpg" width="1200" height="675" loading="lazy" alt="Un relief de 125 000 triangles exporté sans adoucissement, ouvert dans SketchUp 2027 : toutes les arêtes sont tracées et la surface paraît noire"><figcaption><b>Arêtes tracées</b><span>Relief d'essai, version 0.2.0</span></figcaption></figure>
+      <figure class="vignette"><img src="img/sketchup-terrain-adouci.jpg" width="1200" height="675" loading="lazy" alt="Le même relief exporté avec adoucissement à 35 degrés, ouvert dans SketchUp 2027 : surface verte ombrée"><figcaption><b>Adouci à 35 degrés</b><span>Même relief, version 0.2.1</span></figcaption></figure>
     </div>
   </div>
 </section>
@@ -391,13 +427,13 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
     </div>
     <ul class="limites">
       <li><b>Windows 64 bits seulement.</b> Les bibliothèques compilées jointes sont celles de Windows et de Python 3.13, la version de Blender 5.1 et 5.2. Essais menés sur la 5.2.3 LTS.</li>
-      <li><b>Surfaces texturées.</b> Elles gardent leur triangulation et leurs diagonales dans SketchUp. Les surfaces unies sont fusionnées.</li>
+      <li><b>Surfaces texturées.</b> Elles sont fusionnées quand leur texture se déroule d'un seul tenant. Avec des îlots de dépliage séparés, des miroirs ou des coutures, elles gardent leur triangulation et leurs diagonales dans SketchUp.</li>
       <li><b>Collections instanciées.</b> Une collection instanciée s'exporte comme un seul composant, pas comme une hiérarchie de sous-composants.</li>
       <li><b>Objets non exportés.</b> Nuages de points, volumes, crayons gras et cheveux. Courbes, textes et surfaces sont exportés en maillage évalué.</li>
       <li><b>Très gros fichiers.</b> Un import coûte environ 30 fois la taille du fichier en mémoire, et supprimer ensuite des centaines de milliers d'objets est lent&nbsp;: c'est le comportement de Blender.</li>
-      <li><b>Très gros modèles dans SketchUp.</b> Les fichiers lourds du banc de charge (jusqu'à 85&nbsp;Mo) ont été relus dans Blender, pas dans SketchUp. Leur confort d'affichage dans SketchUp reste à vérifier.</li>
-      <li><b>Format écrit.</b> Les fichiers sont au format SketchUp 2017, que les versions plus récentes ouvrent. Vérifié dans SketchUp pour le web, pas encore dans SketchUp Desktop.</li>
-      <li><b>Fichiers récents.</b> La lecture des fichiers SketchUp 2021 et suivants repose sur openskp. Nos essais ont porté sur des fichiers de l'extension et sur des fichiers enregistrés par SketchUp en version 26.1.</li>
+      <li><b>Beaucoup d'objets dans SketchUp.</b> Ouverts dans SketchUp 2027, 100&nbsp;000 chaises tournent à 15 images par seconde et 20&nbsp;000 groupes à 10 (carte RTX 3050 Ti). Un terrain de 500&nbsp;000 triangles reste à 60.</li>
+      <li><b>Format écrit.</b> Les fichiers sont au format SketchUp 2017, que les versions plus récentes ouvrent. SketchUp 2027 affiche un message d'information («&nbsp;Version de ce fichier&nbsp;: 17.0.1&nbsp;») et marque le modèle comme modifié&nbsp;; un enregistrement le passe au format récent. Vérifié dans SketchUp 2027 et dans SketchUp pour le web, pas dans les versions de bureau antérieures.</li>
+      <li><b>Fichiers récents.</b> La lecture des fichiers SketchUp 2021 et suivants repose sur openskp. Nos essais ont porté sur des fichiers de l'extension, des fichiers enregistrés par SketchUp en version 26.1 et des copies enregistrées par SketchUp 2027. Un fichier réel d'architecte peut contenir des cas que nous n'avons pas rencontrés&nbsp;: en cas de défaut, joindre le fichier à une Issue.</li>
     </ul>
   </div>
 </section>
@@ -422,7 +458,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
       <div>
         <h3>Projet</h3>
         <p><a data-repo href="https://github.com/">Code source et suivi des défauts</a></p>
-        <p><a href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger la version 0.2.0</a></p>
+        <p><a href="extensions/arkedia_skp_bridge-0.2.1.zip" download>Télécharger la version 0.2.1</a></p>
         <p>Licence GPL-3.0 ou ultérieure</p>
       </div>
     </div>

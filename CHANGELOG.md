@@ -1,5 +1,55 @@
 # Journal des modifications
 
+## 0.2.1, 27 octobre 2026 : essais dans SketchUp 2027 et corrections
+
+La 0.2.0 n'avait été ouverte que dans SketchUp pour le web. Cette version suit une série d'essais dans SketchUp 2027
+(version de bureau) : ouverture des fichiers exportés, enregistrement de copies en versions 2013, 2017, 2020, 2021
+et 2027, puis relecture de ces copies dans Blender.
+
+### Correction à l'import
+
+- Les fichiers enregistrés par SketchUp 2021 ou plus récent arrivaient dans Blender avec des faces retournées. Sur la
+  maison d'essai réenregistrée par SketchUp 2027, la 0.2.0 retournait 290 faces sur 1 284 (22 %), 14 objets sur 20
+  changeaient de volume et la somme des volumes passait de 70 m³ à -238 m³. Ces fichiers contiennent une matière
+  « Layer_<étiquette> » par étiquette : l'import la prenait pour une matière de l'utilisateur et écartait alors au
+  hasard le recto ou le verso des faces doublées. Elle est maintenant ignorée. Les copies réenregistrées par
+  SketchUp 2027 donnent la même surface, le même nombre de triangles et la même boîte englobante que l'original, et
+  un volume identique (à 4e-5 près sur le terrain de 500 000 triangles), du plus petit modèle (85 Ko) au plus gros
+  (89 Mo). Les trois petits modèles ont aussi été réenregistrés en versions 2013, 2017, 2020 et 2021, avec le même
+  résultat.
+
+### Export
+
+- Les surfaces texturées sont fusionnées quand leurs coordonnées de texture suivent une même projection plane (un
+  sol carrelé, un mur déroulé d'un seul tenant) : une face au lieu d'un triangle par maille, texture inchangée. La
+  diagonale de la terrasse de la maison d'essai disparaît. Une surface dont le dépliage est coupé en îlots ou
+  retourné en miroir garde ses triangles.
+- Nouvelle option « Adoucir les maillages denses », active par défaut, avec son angle (35 degrés). Les objets de
+  2 000 faces et plus (terrain, maillage issu d'un scan) reçoivent des arêtes douces entre faces voisines, comme
+  l'outil Adoucir de SketchUp. Sans cela, SketchUp trace chaque arête et un grand maillage s'affiche presque noir.
+  L'option ne ralentit pas l'export : en comparant la 0.2.0 et la 0.2.1 côte à côte sur trois cas (terrain de 180 000
+  triangles, sphère de 327 680, terrain de 500 000), les temps sont les mêmes à 3 % près.
+- Nouvelle option « Unités dans SketchUp » : mètres, centimètres ou millimètres (par défaut, ceux de la scène
+  Blender), ou pouces. Le gabarit d'openskp ouvrait tout en pouces et en pieds : 2,80 m s'affichait « 9' 2 1/4" ».
+  Surfaces et volumes sortent en m² et m³.
+- Vue enregistrée : le cadrage s'appuie sur les huit coins de la boîte englobante et garde 8 % de marge (15 %
+  avant). Le modèle remplit mieux la fenêtre à l'ouverture.
+- Si le gabarit d'openskp n'a pas la forme attendue, un avertissement dit que les unités ou la vue n'ont pas pu être
+  écrites, au lieu de les ignorer en silence.
+
+### Vérifications dans SketchUp 2027
+
+- Six modèles exportés ont été ouverts, parcourus et réenregistrés : la maison d'essai, deux projets Bonsai (calques
+  par niveau IFC et par classe IFC), un terrain de 500 000 triangles, 100 000 chaises et 20 000 groupes. Aucune
+  erreur. L'ouverture prend de 11 secondes (100 000 chaises) à 75 secondes au plus (terrain de 500 000 triangles),
+  démarrage de SketchUp compris. Le cadrage enregistré place les huit coins de la boîte englobante dans la fenêtre.
+- SketchUp 2027 affiche à l'ouverture un message d'information, « Version de ce fichier : 17.0.1 » (les fichiers
+  écrits sont au format SketchUp 2017), puis marque le modèle comme modifié. À l'enregistrement, il le passe au
+  format récent.
+- Série de charge relancée sur le code final : 21 cas relus dans Blender, surface égale à l'originale à 1e-7 près.
+  Le 22e, le terrain de 500 000 triangles, a été exporté sans erreur, mais sa relecture a été refusée ce jour-là par
+  le contrôle de mémoire (4,2 Go libres sur la machine d'essai).
+
 ## 0.2.0, 27 octobre 2026 : première version publique
 
 Cette version est la première diffusée hors d'ARKEDIA 3D. Elle a été validée par une série d'essais de charge

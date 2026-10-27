@@ -67,13 +67,20 @@ Les mesures de mémoire sont celles de la mémoire engagée par le processus Ble
 | `mem_import.py <fichier.skp> <plafond_Go> <journal>` | mémoire d'un import par phase : lecture, scène instanciée, construction dans Blender |
 | `guard_test.py <journal> <fichier.skp>...` | décision du garde-fou mémoire de l'import, avec la mémoire réelle puis des mémoires simulées de 4, 8 et 16 Go |
 | `render_readme.py <source.blend\|.skp> <image.png>` | rendu Workbench d'une scène, utilisé pour les images du README |
+| `check_desktop_saved.py <rapport.json> <référence.skp> <copie.skp>...` | relit le fichier d'origine et ses copies réenregistrées par SketchUp (formats 2013, 2017, 2020, 2021, 2027) et compare objets, triangles, aire, volume, boîte englobante, matériaux. Les rapports valent 1 quand SketchUp n'a rien déformé |
+| `diff_objects.py <rapport.json> <référence.skp> <autre.skp> [nodrop]` | compare deux fichiers objet par objet : aire, volume signé, faces dont la normale est inversée d'un fichier à l'autre. À réserver aux fichiers de quelques milliers d'objets : sur 100 000 objets il demande plus de 5 Go de mémoire |
+| `terrain_demo.py <dossier> [côté] [bruit] [angle]` | exporte le même relief bruité avec et sans adoucissement des arêtes, pour comparer les deux rendus dans SketchUp |
 | `summarize.py <dossier>...` | tableau des résultats d'un ou plusieurs dossiers du banc de charge (le dernier l'emporte) |
 | `verify_install.py <fichier.skp> <sortie.skp>` | contrôle d'une extension installée (voir plus bas) |
 
 Le dossier `bench/` contient les outils qui ont servi à comprendre et à corriger les lenteurs : micro-mesure
 des appels `bpy` à l'import (`bench_bpy.py`), parcours de la liste des objets de Blender selon l'ordre des noms
 (`bench_walk.py`), profils de l'import, de l'export et de la lecture par openskp (`prof_*.py`), et essai des
-méthodes d'écriture d'une image en PNG (`image_export_test.py`).
+méthodes d'écriture d'une image en PNG (`image_export_test.py`). Deux outils de diagnostic complètent la série
+pour les surfaces : `dump_faces.py` compare le sens des contours que lit openskp avec la normale enregistrée dans le fichier,
+et `dbg_backdrop.py` liste, pour chaque définition, les primitives et les triangles écartés comme versos dupliqués.
+`dbg_materials.py` affiche les matériaux, les styles et les calques que lit openskp : c'est lui qui a montré les matériaux
+synthétiques `Layer_<calque>` des fichiers de SketchUp 2021 et suivants, à l'origine des faces retournées de la 0.2.0.
 
 ## Vérifier l'installation du zip
 
@@ -86,7 +93,7 @@ set BLENDER_USER_CONFIG=%BLENDER_USER_RESOURCES%\config
 set BLENDER_USER_SCRIPTS=%BLENDER_USER_RESOURCES%\scripts
 mkdir "%BLENDER_USER_CONFIG%" "%BLENDER_USER_EXTENSIONS%" "%BLENDER_USER_SCRIPTS%"
 blender --command extension build --source-dir arkedia_skp_bridge --output-dir dist
-blender --command extension install-file -r user_default -e dist\arkedia_skp_bridge-0.2.0.zip
+blender --command extension install-file -r user_default -e dist\arkedia_skp_bridge-0.2.1.zip
 blender -b --factory-startup --python tests\verify_install.py -- exemples\maison_test.skp sortie.skp
 ```
 
