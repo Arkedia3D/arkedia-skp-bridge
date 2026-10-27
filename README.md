@@ -29,13 +29,15 @@ maillage. Le fichier reste léger, et chaque copie peut toujours être convertie
 hiérarchie. Les matériaux gardent leur nom et leurs textures, les couleurs sont converties en linéaire, et les GUID
 et attributs SketchUp restent lisibles dans les propriétés personnalisées (`skp_*`).
 
-**À l'export**, les maillages partagés deviennent des composants, les collections (ou les niveaux IFC, ou les
-classes IFC) deviennent des calques, et les triangles coplanaires sont fusionnés en une seule face avec ses trous.
+**À l'export**, les maillages partagés deviennent des composants, les collections (ou les niveaux IFC, chacun sous
+son nom, ou les classes IFC) deviennent des calques, et les triangles coplanaires sont fusionnés en une seule face avec ses trous.
 Un mur percé de fenêtres, une dalle trouée ou un sol carrelé s'ouvrent dans SketchUp sans diagonales de
 triangulation. Un terrain ou un maillage issu d'un scan reçoit des arêtes douces et s'affiche ombré au lieu de noir.
 Les longueurs s'affichent dans l'unité de la scène Blender (2,80 m au lieu de 9' 2 1/4"). Quand le projet vient de
-Bonsai, la classe IFC, le GlobalId, le nom et les jeux de propriétés passent dans les attributs SketchUp. Le fichier
-s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide près de l'origine.
+Bonsai, la classe IFC, le GlobalId, le nom, le niveau et les jeux de propriétés passent dans les attributs SketchUp,
+et les pièces (IfcSpace) peuvent partir aussi : translucides, nommées « Pièce 01 Chambre », sur une étiquette par
+niveau masquée à l'ouverture. Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide
+près de l'origine.
 
 L'extension fonctionne dans un Blender dont l'interface est en français : elle ne cherche jamais un nœud de shader
 par son nom (traduit), seulement par son type.
@@ -60,7 +62,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.2.1.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.2.2.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -98,10 +100,12 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Sélection uniquement | Sinon, tout ce qui est visible (actif par défaut) |
 | Maillages partagés en composants | Les objets qui partagent un maillage deviennent un composant et ses instances (actif) |
 | Appliquer les modificateurs | Exporte le résultat évalué (actif) |
-| Calques SketchUp | Collection Blender (défaut), niveau IFC, classe IFC ou aucun |
+| Calques SketchUp | Collection Blender (défaut), niveau IFC (une étiquette au nom de chaque niveau), classe IFC ou aucun |
 | Textures image | Écrit les textures des matériaux (actif) |
 | Attributs (classe, GlobalId, nom IFC) | Dictionnaire d'attributs « ARKEDIA » sur chaque objet, avec les propriétés personnalisées en `custom_*` (actif) |
 | Jeux de propriétés IFC | Un dictionnaire `IFC_<jeu>` par jeu de propriétés Bonsai (actif) |
+| Pièces (IfcSpace) | Exporte aussi les volumes de pièces d'un projet Bonsai, même masqués : translucides, nommés « Pièce 01 Chambre », sur une étiquette par niveau, « Pièces - Rez-de-chaussée » par exemple. Avec « Sélection uniquement », les pièces sélectionnées et celles des niveaux de la sélection (inactif) |
+| Étiquette des pièces masquée à l'ouverture | Les pièces sont dans le fichier, leur étiquette est décochée ; un clic dans SketchUp les affiche (actif) |
 | Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
 | Adoucir les maillages denses | Arêtes douces entre faces voisines pour les objets de 2 000 faces et plus (terrain, maillage de scan). Sans elles, SketchUp trace chaque arête et le maillage paraît noir (actif) |
 | Angle d'adoucissement | 35 degrés par défaut. À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées |
@@ -124,6 +128,14 @@ bpy.ops.export_scene.arkedia_skp(
     filepath=r"C:\livraisons\maison.skp",
     only_selected=False,
     layer_mode="IFC_STOREY",
+)
+
+# La même chose avec les pièces, sur leur étiquette masquée à l'ouverture
+bpy.ops.export_scene.arkedia_skp(
+    filepath=r"C:\livraisons\maison_pieces.skp",
+    only_selected=False,
+    layer_mode="IFC_STOREY",
+    export_spaces=True,
 )
 ```
 
@@ -264,6 +276,9 @@ python tests\summarize.py resultats
   texture continue sont fusionnées.
 - Une collection instanciée dans Blender s'exporte comme un seul composant (tous ses objets réunis dans la
   définition), pas comme une hiérarchie de sous-composants.
+- Les pièces (IfcSpace) ont des faces qui coïncident avec les sols et les plafonds : quand leur étiquette est
+  affichée, un moirage apparaît là où elles se superposent. On l'affiche pour lire surfaces et volumes, on la masque
+  pour travailler sur le bâtiment.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de

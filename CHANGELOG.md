@@ -1,5 +1,39 @@
 # Journal des modifications
 
+## 0.2.2, 27 octobre 2026 : pièces IFC et étiquettes de niveau
+
+Cette version vient de l'export de deux relevés modélisés dans Bonsai, un appartement d'un niveau et une villa sur
+trois niveaux, ouverts ensuite dans SketchUp 2027.
+
+### Export
+
+- Nouvelle option « Pièces (IfcSpace) », inactive par défaut. Bonsai masque les volumes de pièces et l'export ne
+  prend que les objets visibles : jusqu'ici, les pièces restaient dans Blender. Avec l'option, elles partent même
+  masquées, chacune dans un groupe nommé d'après son numéro et son nom IFC (« Pièce 01 Chambre »), avec ses jeux de
+  propriétés et une matière translucide (opacité de 20 % au plus). Si cette matière habille aussi le bâtiment, la
+  pièce en reçoit une copie translucide suffixée « (volume) » et le bâtiment garde l'original. Avec « Sélection
+  uniquement », l'export prend les pièces sélectionnées et celles des niveaux touchés par la sélection.
+- Les pièces sont rangées sur une étiquette par niveau, « Pièces - Rez-de-chaussée » par exemple. L'option
+  « Étiquette des pièces masquée à l'ouverture », active par défaut, décoche ces étiquettes dans le fichier :
+  SketchUp ouvre le bâtiment seul, et un clic sur l'étiquette affiche les pièces.
+- Calques par niveau IFC : l'étiquette porte le nom du niveau, « Rez-de-chaussée » au lieu de « IfcBuildingStorey -
+  Rez-de-chaussée ». Le niveau est lu dans la structure IFC (élément contenu dans le niveau, ou partie d'un ensemble
+  qui l'est), puis dans les collections de Blender si l'IFC n'est pas chargé. Sur les deux modèles d'essai, les
+  éléments se répartissent comme en 0.2.1, et les pièces, agrégées à leur niveau, rejoignent l'étiquette de ce niveau.
+- Dictionnaire d'attributs « ARKEDIA » : deux clés de plus quand l'IFC les renseigne, `ifc_storey` (le niveau) et
+  `ifc_long_name` (le nom long, « Chambre » pour la pièce 01).
+
+### Vérifications
+
+- Appartement : 48 éléments sur l'étiquette « Rez-de-chaussée », 5 pièces sur « Pièces - Rez-de-chaussée ». Villa :
+  270 éléments sur trois étiquettes de niveau (102, 101 et 67, la même répartition qu'en 0.2.1) et 27 pièces sur
+  trois étiquettes de pièces. Relus dans Blender, les fichiers gardent la surface du modèle Bonsai à 0,002 % près et
+  ses dimensions.
+- Dans SketchUp 2027, les étiquettes de pièces sont décochées à l'ouverture, chaque pièce est un solide, et tous les
+  objets portent leur dictionnaire « ARKEDIA » (53 sur 53, 297 sur 297).
+- Série de non-régression sur les modèles d'essai sans IFC (11 cas, dont un terrain, des textures et 2 000 copies
+  d'un composant) : après l'aller-retour, surface et boîte englobante identiques à l'original, volume à 1e-5 près.
+
 ## 0.2.1, 27 octobre 2026 : essais dans SketchUp 2027 et corrections
 
 La 0.2.0 n'avait été ouverte que dans SketchUp pour le web. Cette version suit une série d'essais dans SketchUp 2027

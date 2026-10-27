@@ -909,8 +909,14 @@ def _ifc_info(obj, tool, with_psets):
         info["ifc_name"] = getattr(ent, "Name", "") or ""
         if getattr(ent, "PredefinedType", None):
             info["ifc_predefined_type"] = str(ent.PredefinedType)
+        long_name = getattr(ent, "LongName", None)
+        if long_name:
+            info["ifc_long_name"] = str(long_name)
     except Exception:
         pass
+    storey = _ifc_storey_name(ent)
+    if storey:
+        info["ifc_storey"] = storey
     if with_psets:
         try:
             import ifcopenshell.util.element as ue
@@ -922,6 +928,73 @@ def _ifc_info(obj, tool, with_psets):
         except Exception:
             pass
     return info, dicts
+
+
+def _ifc_storey_name(ent):
+    """Nom du niveau (IfcBuildingStorey) qui contient ou agrège l'entité, en remontant conteneurs et agrégats.
+
+    Une volée d'escalier est agrégée à son escalier, lui-même contenu dans le niveau ; une pièce (IfcSpace) est
+    agrégée au niveau. None si l'entité n'est rattachée à aucun niveau ou si IfcOpenShell est absent.
+    """
+    try:
+        import ifcopenshell.util.element as ue
+    except Exception:
+        return None
+    for _ in range(20):
+        if ent is None:
+            return None
+        try:
+            if ent.is_a("IfcBuildingStorey"):
+                return str(ent.Name or getattr(ent, "LongName", None) or "Niveau")
+            nxt = ue.get_container(ent)
+            if nxt is None:
+                nxt = ue.get_aggregate(ent)
+        except Exception:
+            return None
+        ent = nxt
+    return None
+
+
+def _ifc_entity(tool, obj):
+    if tool is None:
+        return None
+    try:
+        return tool.Ifc.get_entity(obj)
+    except Exception:
+        return None
+
+
+def _is_ifc_space(obj, ent):
+    """Volume de pièce d'un projet Bonsai : classe IfcSpace, ou nom « IfcSpace/... » si l'IFC n'est pas chargé."""
+    if ent is not None:
+        try:
+            return bool(ent.is_a("IfcSpace"))
+        except Exception:
+            return False
+    return obj.name.startswith("IfcSpace/")
+
+
+_SPACE_OPACITY = 0.2
+_SPACE_TAG_RGB = (0, 196, 204)
+_SPACE_DEFAULT_RGB = (140, 205, 235)
+
+
+def _space_label(obj, info):
+    """Nom SketchUp d'une pièce : « Pièce 01 Chambre » (numéro et nom long IFC), sinon le nom de l'objet."""
+    parts = [str(x) for x in (info.get("ifc_name"), info.get("ifc_long_name")) if x]
+    if parts:
+        return "Pièce " + " ".join(parts)
+    name = obj.name.split("/", 1)[1] if obj.name.startswith("IfcSpace/") else obj.name
+    return "Pièce " + name
+
+
+def _space_layer(mode, info):
+    if mode == "NONE":
+        return None
+    if mode == "IFC_CLASS":
+        return info.get("ifc_class") or "IfcSpace"
+    storey = info.get("ifc_storey")
+    return f"Pièces - {storey}" if storey else "Pièces"
 
 
 def _collection_index():
@@ -947,12 +1020,18 @@ def _object_layer(obj, mode, info, index):
             head = obj.name.split("/", 1)[0]
             cls = head if head.startswith("Ifc") else None
         return cls
+    if mode == "IFC_STOREY" and info.get("ifc_storey"):
+        # niveau lu dans l'IFC (conteneur, puis agrégat) : rattache aussi les éléments d'un agrégat (volées d'escalier)
+        return info["ifc_storey"]
     for coll in index.get(obj.name_full, ()):
         nm = coll.name
         if nm in ("Collection", "Scene Collection") or nm.endswith("(source geometry)"):
             continue
-        if mode == "IFC_STOREY" and not nm.startswith("IfcBuildingStorey"):
-            continue
+        if mode == "IFC_STOREY":
+            if not nm.startswith("IfcBuildingStorey"):
+                continue
+            # étiquette au nom du niveau, sans le préfixe de la collection Bonsai (« IfcBuildingStorey/RDC » -> « RDC »)
+            return nm.split("/", 1)[1] if "/" in nm and nm.split("/", 1)[1].strip() else nm
         return nm
     return None
 
@@ -1942,7 +2021,7 @@ _SOFTEN_MIN_FACES = 2000
 def _export_skp_impl(filepath, context, only_selected=True, use_components=True, use_modifiers=True,
                      layer_mode="COLLECTION", use_textures=True, store_attributes=True, export_psets=True,
                      merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
-                     soften_angle=_SOFTEN_ANGLE_DEG):
+                     soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True):
     from openskp import create
 
     t0 = time.time()
@@ -1950,15 +2029,47 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
     soften = {"angle": min(89.0, max(1.0, float(soften_angle))), "min_faces": _SOFTEN_MIN_FACES} if soften_dense else None
     depsgraph = context.evaluated_depsgraph_get()
 
-    candidates = context.selected_objects if (only_selected and context.selected_objects) else context.scene.objects
+    selection = only_selected and bool(context.selected_objects)
+    candidates = context.selected_objects if selection else context.scene.objects
     pool = [o for o in candidates if o.type in _MESHLIKE and o.visible_get()]
     inst_empties = [o for o in candidates if _is_collection_instance(o) and o.visible_get()]
     ignored = [o for o in candidates if o.type in ("GPENCIL", "GREASEPENCIL", "VOLUME", "POINTCLOUD", "CURVES")
                and o.visible_get()]
+
+    need_ifc = store_attributes or export_spaces or layer_mode in ("IFC_STOREY", "IFC_CLASS")
+    tool = _bonsai_tool() if need_ifc else None
+
+    # pièces (IfcSpace) : Bonsai les masque ; elles partent quand même, avec leur étiquette et une matière translucide.
+    # Avec « Sélection uniquement », seules celles des niveaux touchés par la sélection.
+    spaces = set()
+    if export_spaces:
+        in_layer = context.view_layer.objects
+        wanted_storeys = None
+        if selection:
+            wanted_storeys = set()
+            for o in context.selected_objects:
+                ent = _ifc_entity(tool, o)
+                if _is_ifc_space(o, ent) and o.type in _MESHLIKE:
+                    spaces.add(o.name)
+                st = _ifc_storey_name(ent) if ent is not None else None
+                if st:
+                    wanted_storeys.add(st)
+        for o in context.scene.objects:
+            if o.type not in _MESHLIKE or o.name in spaces or o.name not in in_layer:
+                continue
+            ent = _ifc_entity(tool, o)
+            if not _is_ifc_space(o, ent):
+                continue
+            if wanted_storeys is not None:
+                st = _ifc_storey_name(ent) if ent is not None else None
+                if st is None or st not in wanted_storeys:
+                    continue
+            spaces.add(o.name)
+        in_pool = {o.name for o in pool}
+        pool = pool + [o for o in context.scene.objects if o.name in spaces and o.name not in in_pool]
+
     if not pool and not inst_empties:
         raise RuntimeError("Aucun objet maillage à exporter (sélection vide ou masquée).")
-
-    tool = _bonsai_tool() if store_attributes else None
     tmpdir = tempfile.mkdtemp(prefix="arkedia_skp_")
     stats = {
         "objects": 0, "components": 0, "instances": 0, "groups": 0, "faces": 0, "faces_skipped": 0,
@@ -1996,7 +2107,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
 
         # 1) matériaux (avant tout le reste : contrainte du format)
         handle_by_mat, textured = {}, set()
-        mat_sources = list(pool)
+        mat_sources = [o for o in pool if o.name not in spaces]
         for _coll, parts in inst_parts.values():
             mat_sources.extend(ob for ob, _m in parts)
         for obj in mat_sources:
@@ -2016,19 +2127,51 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 else:
                     h = builder.add_material(name, rgb, opacity=opacity)
                 handle_by_mat[mat.name] = h
-        stats["materials"] = len(handle_by_mat)
+        # matières des pièces : translucides, sans texture ; « (volume) » si la même matière sert aussi au bâti
+        space_handle, space_default = {}, None
+        for obj in pool:
+            if obj.name not in spaces:
+                continue
+            mats = [s.material for s in obj.material_slots if s.material is not None]
+            if not mats and space_default is None:
+                space_default = builder.add_material("Pièce (volume)", _SPACE_DEFAULT_RGB, opacity=_SPACE_OPACITY)
+            for mat in mats:
+                if mat.name in space_handle:
+                    continue
+                name, rgb, opacity, _img = _material_info(mat, tmpdir, None)
+                op = opacity if (opacity is not None and opacity < _SPACE_OPACITY) else _SPACE_OPACITY
+                if mat.name in handle_by_mat:
+                    name = _clean_material_name(name + " (volume)")
+                space_handle[mat.name] = builder.add_material(name, rgb, opacity=op)
+        stats["materials"] = len(handle_by_mat) + len(space_handle) + (1 if space_default is not None else 0)
+        stats["spaces"] = len(spaces)
 
         # 2) infos IFC + calques (avant les définitions)
         infos, psets, layer_of = {}, {}, {}
         coll_index = _collection_index() if (store_attributes or layer_mode != "NONE") else {}
         for obj in pool + inst_empties:
-            info, dicts = _ifc_info(obj, tool, export_psets) if store_attributes else ({}, [])
+            info, dicts = _ifc_info(obj, tool, export_psets and store_attributes) if tool is not None else ({}, [])
             infos[obj.name], psets[obj.name] = info, dicts
-            layer_of[obj.name] = _object_layer(obj, layer_mode, info, coll_index)
+            if obj.name in spaces:
+                layer_of[obj.name] = _space_layer(layer_mode, info)
+            else:
+                layer_of[obj.name] = _object_layer(obj, layer_mode, info, coll_index)
+        # étiquette qui ne porte que des pièces : couleur à part, masquée à l'ouverture si demandé
+        members = {}
+        for obj in pool + inst_empties:
+            nm = layer_of.get(obj.name)
+            if nm:
+                members.setdefault(_clean_layer_name(nm), set()).add(obj.name in spaces)
+        space_tags = {nm for nm, kinds in members.items() if kinds == {True}}
         layer_handle = {}
-        for name in sorted({_clean_layer_name(v) for v in layer_of.values() if v}):
-            layer_handle[name] = builder.add_layer(name)
+        for name in sorted(members):
+            if name in space_tags:
+                layer_handle[name] = builder.add_layer(name, color=_SPACE_TAG_RGB, hidden=bool(hide_spaces))
+            else:
+                layer_handle[name] = builder.add_layer(name)
         stats["layers"] = len(layer_handle)
+        stats["space_layers"] = sorted(space_tags)
+        stats["space_layers_hidden"] = bool(hide_spaces and space_tags)
 
         def layer_for(obj):
             nm = layer_of.get(obj.name)
@@ -2039,7 +2182,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
         if use_components:
             counts = {}
             for obj in pool:
-                if obj.type == "MESH" and obj.data is not None and not obj.modifiers:
+                if obj.type == "MESH" and obj.data is not None and not obj.modifiers and obj.name not in spaces:
                     counts[obj.data.name_full] = counts.get(obj.data.name_full, 0) + 1
             share = {n: c for n, c in counts.items() if c >= 2}
 
@@ -2077,7 +2220,13 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
             return holder, mesh
 
         def handles_of(obj):
+            if obj.name in spaces:
+                hs = [space_handle.get(s.material.name) if s.material else space_default for s in obj.material_slots]
+                return hs or [space_default]
             return [handle_by_mat.get(s.material.name) if s.material else None for s in obj.material_slots]
+
+        def group_name(obj):
+            return _space_label(obj, infos.get(obj.name, {})) if obj.name in spaces else obj.name
 
         def transform_args(obj):
             mw = obj.matrix_world
@@ -2145,7 +2294,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                     vertex_color_objects += 1
                 trans, m3 = transform_args(obj)
                 kw = attribute_kwargs(obj)
-                with builder.add_group(_su(obj.name), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
+                with builder.add_group(_su(group_name(obj)), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
                     _write_mesh(grp, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
                 stats["groups"] += 1
                 stats["objects"] += 1
@@ -2323,6 +2472,20 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
     use_textures: BoolProperty(name="Textures image", default=True)
     store_attributes: BoolProperty(name="Attributs (classe, GlobalId, nom IFC)", default=True)
     export_psets: BoolProperty(name="Jeux de propriétés IFC", default=True)
+    export_spaces: BoolProperty(
+        name="Pièces (IfcSpace)",
+        description=(
+            "Exporter aussi les volumes de pièces d'un projet Bonsai, même masqués : translucides, nommés « Pièce 01 "
+            "Chambre », sur une étiquette « Pièces - <niveau> ». Avec « Sélection uniquement », seules les pièces des "
+            "niveaux sélectionnés"
+        ),
+        default=False,
+    )
+    hide_spaces: BoolProperty(
+        name="Étiquette des pièces masquée à l'ouverture",
+        description="Les pièces sont dans le fichier ; un clic sur leur étiquette dans SketchUp les affiche",
+        default=True,
+    )
     merge_planar: BoolProperty(
         name="Fusionner les triangles coplanaires",
         description="Une face SketchUp par surface plane (avec ses trous), au lieu d'un triangle par maille",
@@ -2376,6 +2539,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 store_attributes=self.store_attributes, export_psets=self.export_psets,
                 merge_planar=self.merge_planar, view_mode=self.view_mode,
                 soften_dense=self.soften_dense, soften_angle=self.soften_angle, units=self.units,
+                export_spaces=self.export_spaces, hide_spaces=self.hide_spaces,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -2392,6 +2556,13 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 f"{s['objects_softened']} maillage(s) dense(s) adouci(s) ({s['faces_softened']} faces) : "
                 f"arêtes douces entre faces voisines à moins de {self.soften_angle:g} degrés",
             )
+        if self.export_spaces:
+            if s.get("spaces"):
+                where = ", ".join(s.get("space_layers") or []) or "sans étiquette"
+                hidden = " (masquées à l'ouverture)" if s.get("space_layers_hidden") else ""
+                self.report({"INFO"}, f"{s['spaces']} pièce(s) exportée(s) : {where}{hidden}")
+            else:
+                self.report({"WARNING"}, "aucune pièce (IfcSpace) trouvée dans la scène")
         for w in s["warnings"]:
             self.report({"WARNING"}, w)
         return {"FINISHED"}
