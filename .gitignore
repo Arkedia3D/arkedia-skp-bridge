@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Essais : environnement jetable, roues dépaquetées, résultats
+tests/.site/
+tests/.sandbox/
+tests/resultats/
+*.skp
+!exemples/*.skp
+*.blend1
+
+# Archives de construction locales (la version publiée est dans docs/extensions/)
+/dist/
+/build/
+
+# Éditeurs
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

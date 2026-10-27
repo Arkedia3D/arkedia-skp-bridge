@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arkedia SKP Bridge : import et export SketchUp pour Blender | ARKEDIA 3D</title>
+<meta name="description" content="Extension Blender gratuite et libre qui lit et écrit les fichiers SketchUp (.skp) sans installer SketchUp. Composants partagés, calques, matériaux, attributs IFC. Par ARKEDIA 3D.">
+<meta name="theme-color" content="#050D1A">
+<meta property="og:title" content="Arkedia SKP Bridge : SketchUp dans Blender, sans SketchUp">
+<meta property="og:description" content="Import et export .skp pour Blender 5.2 LTS. Gratuit, libre, testé de 7 Ko à 85 Mo et jusqu'à 100 000 composants.">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap">
+<style>
+:root {
+  --nuit-1: #050D1A;
+  --nuit-2: #0A1628;
+  --nuit-3: #0F1F35;
+  --surface: #142A45;
+  --cyan: #00F5FF;
+  --cyan-fonce: #00C4CC;
+  --orange: #F59E0B;
+  --orange-vif: #F97316;
+  --orange-clair: #FB923C;
+  --titre: #FFFFFF;
+  --corps: #B8C5D4;
+  --ok: #10B981;
+  --verre: rgba(20, 30, 50, 0.7);
+  --filet: rgba(255, 255, 255, 0.08);
+  --filet-actif: rgba(0, 245, 255, 0.3);
+  --cta: linear-gradient(135deg, #F59E0B, #F97316, #FB923C);
+  --police-titre: "Sora", system-ui, -apple-system, sans-serif;
+  --police-corps: "DM Sans", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body {
+  margin: 0;
+  background: var(--nuit-1);
+  color: var(--corps);
+  font-family: var(--police-corps);
+  font-size: 1rem;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+img { max-width: 100%; display: block; }
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 4px; }
+h1, h2, h3 { font-family: var(--police-titre); color: var(--titre); margin: 0; }
+h1 { font-size: 3.8rem; font-weight: 800; line-height: 1.05; letter-spacing: -0.01em; }
+h2 { font-size: 2.75rem; font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; }
+h3 { font-size: 1.25rem; font-weight: 600; line-height: 1.2; }
+p { margin: 0 0 1rem; }
+code, pre, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.conteneur { width: min(1120px, 100% - 32px); margin-inline: auto; }
+.label {
+  font-family: var(--police-titre); font-weight: 600; font-size: 0.75rem; line-height: 1;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); margin-bottom: 1rem; display: block;
+}
+
+/* barre de navigation */
+.nav { position: sticky; top: 0; z-index: 10; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--filet); }
+.nav-ligne { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 68px; }
+.marque { display: flex; align-items: center; gap: 12px; color: var(--titre); }
+.marque:hover { text-decoration: none; }
+.marque img { width: 40px; height: 40px; border-radius: 19.5%; }
+.marque .nom { font-family: var(--police-titre); font-weight: 700; letter-spacing: 0.3em; font-size: 0.95rem; line-height: 1.1; display: block; }
+.marque .nom b { color: var(--cyan); font-weight: 700; }
+.marque .accroche { font-size: 0.7rem; letter-spacing: 0; color: var(--corps); display: block; font-weight: 400; margin-top: 2px; }
+.nav ul { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; font-size: 0.9rem; }
+.nav ul a { color: var(--corps); }
+.nav ul a:hover { color: var(--titre); text-decoration: none; }
+
+/* boutons */
+.bouton { display: inline-flex; align-items: center; gap: 10px; font-family: var(--police-titre); font-weight: 600; font-size: 0.95rem;
+  line-height: 1; padding: 15px 24px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+.bouton:hover { text-decoration: none; }
+.bouton.cta { background: var(--cta); color: #1A1204; box-shadow: 0 8px 28px rgba(249, 115, 22, 0.28); }
+.bouton.cta:hover { filter: brightness(1.06); }
+.bouton.fantome { background: transparent; color: var(--titre); border-color: rgba(255, 255, 255, 0.25); }
+.bouton.fantome:hover { border-color: var(--cyan); color: var(--cyan); }
+.bouton.petit { padding: 11px 18px; font-size: 0.85rem; }
+
+/* en-tête de page */
+.hero { padding: 88px 0 56px; background:
+  radial-gradient(60% 60% at 85% 0%, rgba(0, 245, 255, 0.10), transparent 70%),
+  radial-gradient(50% 50% at 0% 30%, rgba(36, 72, 128, 0.35), transparent 70%); }
+.hero-grille { display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center; }
+.hero p.chapo { font-size: 1.15rem; max-width: 34em; margin-top: 24px; }
+.hero .actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 32px; }
+.hero small { display: block; margin-top: 18px; font-size: 0.85rem; }
+.vignettes { display: grid; gap: 14px; }
+.vignette { background: var(--verre); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--filet);
+  border-radius: 14px; overflow: hidden; margin: 0; }
+.vignette img { width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: center 40%; background: var(--nuit-2); }
+.vignette figcaption { padding: 10px 16px; font-size: 0.85rem; display: flex; justify-content: space-between; gap: 12px; }
+.vignette figcaption b { color: var(--titre); font-family: var(--police-titre); font-weight: 600; font-size: 0.8rem; }
+
+/* chiffres */
+.chiffres { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 56px; }
+.chiffre { background: var(--verre); border: 1px solid var(--filet); border-radius: 14px; padding: 22px 22px 20px; }
+.chiffre strong { display: block; font-family: var(--police-titre); font-weight: 800; font-size: 2.1rem; color: var(--cyan); line-height: 1.05; }
+.chiffre span { display: block; margin-top: 8px; font-size: 0.92rem; line-height: 1.45; }
+
+/* sections */
+section.bloc { padding: 88px 0; }
+section.bloc.alt { background: var(--nuit-2); border-block: 1px solid var(--filet); }
+.titre-section { max-width: 780px; margin-bottom: 44px; }
+.titre-section p { margin-top: 18px; font-size: 1.08rem; }
+.deux { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.deux > * { min-width: 0; }
+.carte { background: var(--verre); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--filet);
+  border-radius: 14px; padding: 28px; transition: border-color .2s; }
+.carte:hover { border-color: var(--filet-actif); }
+.carte h3 { margin-bottom: 14px; }
+.carte p:last-child { margin-bottom: 0; }
+.carte ul { margin: 0; padding-left: 1.1rem; }
+.carte li { margin-bottom: 8px; }
+
+/* flux */
+.flux { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; align-items: stretch; margin-top: 8px; }
+.etape { position: relative; background: var(--verre); border: 1px solid var(--filet); padding: 24px 22px 22px; }
+.etape:first-child { border-radius: 14px 0 0 14px; }
+.etape:last-child { border-radius: 0 14px 14px 0; }
+.etape + .etape { border-left: 0; }
+.etape .n { font-family: var(--police-titre); font-weight: 600; font-size: 0.75rem; letter-spacing: 0.12em; color: var(--cyan); }
+.etape h3 { margin: 8px 0 8px; font-size: 1.1rem; }
+.etape p { margin: 0; font-size: 0.92rem; line-height: 1.5; }
+.etape.pivot { background: linear-gradient(180deg, rgba(0, 245, 255, 0.10), rgba(20, 30, 50, 0.7)); border-color: var(--filet-actif); }
+.etape.pivot + .etape { border-left: 1px solid var(--filet-actif); }
+
+/* installation */
+.copie { display: flex; gap: 10px; align-items: stretch; background: var(--nuit-1); border: 1px solid var(--filet); border-radius: 10px; padding: 6px 6px 6px 16px; margin: 14px 0 18px; min-width: 0; }
+.copie code { flex: 1; min-width: 0; align-self: center; color: var(--titre); font-size: 0.88rem; overflow-x: auto; white-space: nowrap; padding: 8px 0; }
+.copie .bouton { flex: none; }
+ol.pas { margin: 0 0 18px; padding-left: 1.25rem; }
+ol.pas li { margin-bottom: 6px; }
+kbd { font-family: var(--police-corps); font-size: 0.9em; color: var(--titre); background: var(--surface); border: 1px solid var(--filet); border-radius: 6px; padding: 1px 7px; }
+
+/* tableau */
+.tableau { overflow-x: auto; border: 1px solid var(--filet); border-radius: 14px; background: var(--verre); }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.95rem; }
+th, td { padding: 13px 18px; text-align: left; border-bottom: 1px solid var(--filet); }
+th { font-family: var(--police-titre); font-weight: 600; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); background: rgba(5, 13, 26, 0.5); white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td:first-child { color: var(--titre); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: rgba(0, 245, 255, 0.04); }
+.note { font-size: 0.88rem; margin-top: 14px; }
+
+/* captures */
+.captures { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 28px; }
+
+/* limites */
+.limites { columns: 2; column-gap: 40px; margin: 0; padding-left: 1.1rem; }
+.limites li { break-inside: avoid; margin-bottom: 14px; }
+.limites li b { color: var(--titre); font-weight: 600; }
+
+/* pied de page */
+footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: var(--nuit-1); font-size: 0.92rem; }
+.pied { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 40px; }
+.pied h3 { font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); margin-bottom: 14px; font-weight: 600; }
+.pied p { margin: 0 0 8px; }
+.mentions { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--filet); font-size: 0.82rem; }
+
+@media (max-width: 960px) {
+  h1 { font-size: 2.2rem; }
+  h2 { font-size: 1.75rem; }
+  h3 { font-size: 1.1rem; }
+  .hero { padding: 56px 0 40px; }
+  .hero-grille, .deux, .captures, .pied { grid-template-columns: 1fr; }
+  .hero-grille { gap: 36px; }
+  .chiffres { grid-template-columns: 1fr 1fr; }
+  .flux { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .etape, .etape:first-child, .etape:last-child { border-radius: 14px; border: 1px solid var(--filet); }
+  .etape + .etape, .etape.pivot + .etape { border-left: 1px solid var(--filet); }
+  .etape.pivot { border-color: var(--filet-actif); }
+  section.bloc { padding: 56px 0; }
+  .limites { columns: 1; }
+  .nav ul { display: none; }
+  .marque .accroche { display: none; }
+  body { font-size: 0.95rem; }
+}
+@media (max-width: 520px) {
+  .chiffres, .flux { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .carte { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="conteneur nav-ligne">
+    <a class="marque" href="#haut" aria-label="ARKEDIA 3D, Arkedia SKP Bridge">
+      <img src="img/arkedia3d-icone.png" width="40" height="40" alt="">
+      <span><span class="nom">ARKEDIA <b>3D</b></span><span class="accroche">Agence de numérisation 3D et visites virtuelles</span></span>
+    </a>
+    <nav aria-label="Sections">
+      <ul>
+        <li><a href="#fonctions">Ce qu'elle fait</a></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#performances">Performances</a></li>
+        <li><a href="#fidelite">Fidélité</a></li>
+        <li><a href="#limites">Limites</a></li>
+      </ul>
+    </nav>
+    <a class="bouton cta petit" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger</a>
+  </div>
+</header>
+
+<main id="haut">
+<section class="hero">
+  <div class="conteneur">
+    <div class="hero-grille">
+      <div>
+        <span class="label">Extension Blender, gratuite et libre</span>
+        <h1>Livrez du SketchUp depuis Blender.</h1>
+        <p class="chapo">Arkedia SKP Bridge lit et écrit les fichiers .skp directement dans Blender 5.2 LTS. Aucun SketchUp à installer, aucun détour par l'OBJ ou l'IFC. Un composant placé 100&nbsp;000 fois reste un seul maillage, un mur percé de fenêtres s'ouvre sans diagonales, et la classe IFC suit dans les attributs.</p>
+        <div class="actions">
+          <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger la version 0.2.0</a>
+          <a class="bouton fantome" href="#installation">Installer par le dépôt</a>
+          <a class="bouton fantome" data-repo href="https://github.com/">Voir le code</a>
+        </div>
+        <small>Windows 64 bits. Testée sur Blender 5.2.3 LTS, déclarée compatible 5.1. Licence GPL-3.0 ou ultérieure. Zip de 2,2&nbsp;Mo, bibliothèques comprises.</small>
+      </div>
+      <div class="vignettes">
+        <figure class="vignette">
+          <img src="img/blender-maison-importee.jpg" width="1280" height="800" alt="Une maison à deux niveaux avec terrasse et chaises, importée dans Blender">
+          <figcaption><b>Blender</b><span>Import du fichier .skp</span></figcaption>
+        </figure>
+        <figure class="vignette">
+          <img src="img/sketchup-web-maison.jpg" width="800" height="600" alt="La même maison ouverte dans SketchUp pour le web après export depuis Blender">
+          <figcaption><b>SketchUp pour le web</b><span>Export depuis Blender</span></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="chiffres" role="list">
+      <div class="chiffre" role="listitem"><strong>0</strong><span>SketchUp à installer, ni compte, ni licence</span></div>
+      <div class="chiffre" role="listitem"><strong>100&nbsp;000</strong><span>composants exportés en 11&nbsp;secondes</span></div>
+      <div class="chiffre" role="listitem"><strong>85&nbsp;Mo</strong><span>de géométrie (500&nbsp;000 triangles) importés en 49&nbsp;secondes</span></div>
+      <div class="chiffre" role="listitem"><strong>17 sur 17</strong><span>cas de charge fidèles à l'original après aller-retour</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="bloc" id="fonctions">
+  <div class="conteneur">
+    <div class="titre-section">
+      <span class="label">Ce qu'elle fait</span>
+      <h2>Un fichier .skp qui s'ouvre comme s'il venait de SketchUp.</h2>
+      <p>Nous l'avons construite pour notre flux de relevé LiDAR vers la CAO et le BIM&nbsp;: nuage de points, modélisation dans Blender avec Bonsai, livraison dans le format que le client ouvre tous les jours.</p>
+    </div>
+    <div class="deux">
+      <article class="carte">
+        <h3>À l'import</h3>
+        <ul>
+          <li>Un composant répété devient des objets Blender qui partagent un seul maillage&nbsp;: léger, et chaque copie reste éditable.</li>
+          <li>Étiquettes en collections, scènes en caméras, hiérarchie des groupes conservée.</li>
+          <li>Matériaux nommés, textures, couleurs converties en linéaire.</li>
+          <li>GUID et attributs SketchUp lisibles dans les propriétés personnalisées.</li>
+          <li>Un contrôle de mémoire refuse un fichier trop lourd avant que Blender ne fige l'ordinateur.</li>
+        </ul>
+      </article>
+      <article class="carte">
+        <h3>À l'export</h3>
+        <ul>
+          <li>Groupes et composants natifs, calques par collection, niveau IFC ou classe IFC.</li>
+          <li>Triangles coplanaires fusionnés en une face avec ses trous&nbsp;: murs et toits unis sans diagonales.</li>
+          <li>Depuis Bonsai&nbsp;: classe IFC, GlobalId, nom et jeux de propriétés dans les attributs SketchUp.</li>
+          <li>Matériaux, transparence et textures, modificateurs appliqués, unités de la scène respectées.</li>
+          <li>Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle.</li>
+        </ul>
+      </article>
+    </div>
+
+    <div style="margin-top:56px">
+      <span class="label">Dans le flux d'ARKEDIA 3D</span>
+      <div class="flux">
+        <div class="etape"><span class="n">01</span><h3>Relevé LiDAR</h3><p>Nuage de points en E57 ou PLY, à 2&nbsp;cm près.</p></div>
+        <div class="etape"><span class="n">02</span><h3>Modélisation</h3><p>Blender et Bonsai&nbsp;: maquette BIM, classes et niveaux IFC.</p></div>
+        <div class="etape pivot"><span class="n">03</span><h3>Arkedia SKP Bridge</h3><p>Export .skp en une commande, avec ses calques et ses attributs.</p></div>
+        <div class="etape"><span class="n">04</span><h3>Livraison</h3><p>Le client ouvre le fichier dans SketchUp, sur le poste ou dans le navigateur.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="bloc alt" id="installation">
+  <div class="conteneur">
+    <div class="titre-section">
+      <span class="label">Installation</span>
+      <h2>Deux minutes, sans rien d'autre à installer.</h2>
+      <p>Blender 5.2 LTS (ou 5.1, non testé) sous Windows 64 bits. L'archive contient ses bibliothèques&nbsp;: aucune connexion supplémentaire n'est nécessaire.</p>
+    </div>
+    <div class="deux">
+      <article class="carte">
+        <h3>Par le dépôt d'extensions</h3>
+        <p>Les mises à jour arrivent toutes seules.</p>
+        <ol class="pas">
+          <li>Dans Blender&nbsp;: Édition, Préférences, Obtenir des extensions.</li>
+          <li>Bouton «&nbsp;Dépôts&nbsp;», puis «&nbsp;+&nbsp;» et «&nbsp;Ajouter un dépôt distant&nbsp;».</li>
+          <li>Coller l'adresse ci-dessous, autoriser l'accès en ligne quand Blender le propose, puis installer «&nbsp;Arkedia SKP Bridge&nbsp;».</li>
+        </ol>
+        <div class="copie">
+          <code id="adresse" data-index-url>L'adresse s'affiche ici dès que le site est en ligne.</code>
+          <button class="bouton fantome petit" id="copier" type="button">Copier</button>
+        </div>
+      </article>
+      <article class="carte">
+        <h3>Par le fichier zip</h3>
+        <p>Pour un poste hors ligne ou une version précise.</p>
+        <ol class="pas">
+          <li>Télécharger le zip ci-dessous.</li>
+          <li>Dans Préférences, Obtenir des extensions&nbsp;: menu déroulant en haut à droite, «&nbsp;Install from Disk&nbsp;» (libellé non traduit).</li>
+          <li>Ou glisser le zip sur la fenêtre de Blender.</li>
+        </ol>
+        <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.0.zip" download>arkedia_skp_bridge-0.2.0.zip</a>
+      </article>
+    </div>
+    <p class="note" style="margin-top:22px">Ensuite, Fichier, Importer et Fichier, Exporter proposent «&nbsp;SketchUp Arkedia (.skp)&nbsp;». Un fichier d'exemple, la maison ci-dessus, est dans le dépôt&nbsp;: <code>exemples/maison_test.skp</code>.</p>
+  </div>
+</section>
+
+<section class="bloc" id="performances">
+  <div class="conteneur">
+    <div class="titre-section">
+      <span class="label">Performances</span>
+      <h2>De la petite maison au chantier de 100&nbsp;000 pièces.</h2>
+      <p>Mesures prises en arrière-plan sur un portable Intel Core i7-11800H (8 cœurs), 15,6&nbsp;Go de mémoire, Windows 11, Blender 5.2.3 LTS. L'export part d'une scène Blender, l'import relit le fichier produit.</p>
+    </div>
+    <div class="tableau">
+      <table>
+        <thead>
+          <tr><th>Modèle</th><th class="num">Fichier .skp</th><th class="num">Export</th><th class="num">Import</th><th class="num">Mémoire à l'import</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Maison d'essai (20 objets, 3 composants, 1 texture)</td><td class="num">83&nbsp;Ko</td><td class="num">1,0&nbsp;s</td><td class="num">0,1&nbsp;s</td><td class="num">0,3&nbsp;Go</td></tr>
+          <tr><td>2&nbsp;000 murs, 8 matériaux</td><td class="num">4,0&nbsp;Mo</td><td class="num">6,0&nbsp;s</td><td class="num">2,9&nbsp;s</td><td class="num">0,37&nbsp;Go</td></tr>
+          <tr><td>20&nbsp;000 murs, 20&nbsp;000 groupes distincts</td><td class="num">41,2&nbsp;Mo</td><td class="num">49,4&nbsp;s</td><td class="num">29,3&nbsp;s</td><td class="num">1,36&nbsp;Go</td></tr>
+          <tr><td>30&nbsp;000 chaises, un seul composant</td><td class="num">9,5&nbsp;Mo</td><td class="num">3,7&nbsp;s</td><td class="num">4,1&nbsp;s</td><td class="num">0,50&nbsp;Go</td></tr>
+          <tr><td>100&nbsp;000 chaises, un seul composant</td><td class="num">31,6&nbsp;Mo</td><td class="num">10,7&nbsp;s</td><td class="num">14,3&nbsp;s</td><td class="num">1,09&nbsp;Go</td></tr>
+          <tr><td>Dalle plane de 180&nbsp;000 triangles (une seule face)</td><td class="num">7&nbsp;Ko</td><td class="num">12,1&nbsp;s</td><td class="num">moins de 0,1&nbsp;s</td><td class="num">0,26&nbsp;Go</td></tr>
+          <tr><td>Terrain bruité de 180&nbsp;000 triangles</td><td class="num">30,5&nbsp;Mo</td><td class="num">10,3&nbsp;s</td><td class="num">17,8&nbsp;s</td><td class="num">1,26&nbsp;Go</td></tr>
+          <tr><td>Sphère de 327&nbsp;680 triangles</td><td class="num">56,0&nbsp;Mo</td><td class="num">17,5&nbsp;s</td><td class="num">31,0&nbsp;s</td><td class="num">1,97&nbsp;Go</td></tr>
+          <tr><td>Terrain bruité de 500&nbsp;000 triangles</td><td class="num">85,1&nbsp;Mo</td><td class="num">27,2&nbsp;s</td><td class="num">49,1&nbsp;s</td><td class="num">2,88&nbsp;Go</td></tr>
+          <tr><td>10 plans texturés (images de bruit de 1&nbsp;024 et 2&nbsp;048 pixels)</td><td class="num">56,1&nbsp;Mo</td><td class="num">4,5&nbsp;s</td><td class="num">0,7&nbsp;s</td><td class="num">0,44&nbsp;Go</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">La mémoire est le pic de mémoire engagée par Blender, démarrage compris (0,26&nbsp;Go). Pour un fichier riche en géométrie, il faut compter environ 30 fois sa taille. Le temps d'import va de 0,4 à 0,7 seconde par mégaoctet de géométrie&nbsp;: la lecture du format se fait en Python pur.</p>
+  </div>
+</section>
+
+<section class="bloc alt" id="fidelite">
+  <div class="conteneur">
+    <div class="titre-section">
+      <span class="label">Fidélité</span>
+      <h2>Ce qui sort de Blender revient identique.</h2>
+      <p>Chaque cas de charge mesure la surface, le volume, la boîte englobante et le nombre de triangles de la scène, l'exporte, relit le fichier dans un second Blender et compare. Sur les 17 cas, l'écart de surface reste sous 1e-7 et la boîte englobante sous 0,1&nbsp;mm. Réexporté et relu une deuxième fois, le modèle ne dérive pas.</p>
+    </div>
+    <div class="deux">
+      <article class="carte">
+        <h3>Unité par unité</h3>
+        <p>Sur la maison d'essai, chaque mur, dalle, toiture, vitrage et chaise (normale, tournée, en miroir) est comparé à son original&nbsp;: centre de surface, aire, volume, boîte. Les 20 unités sont retrouvées à un micromètre près. Un accoudoir du mauvais côté changerait le centre de surface sans toucher au volume total&nbsp;: ce contrôle le verrait.</p>
+      </article>
+      <article class="carte">
+        <h3>Cas limites</h3>
+        <p>Faces dégénérées, sommets confondus, quadrilatères gauchis, trois faces sur une arête, échelles négatives, parentés cisaillées, objet à 6&nbsp;700&nbsp;km de l'origine, scène en millimètres, modificateurs, noms accentués, japonais ou de 300 caractères, collections instanciées&nbsp;: tous passent.</p>
+      </article>
+    </div>
+    <div class="captures">
+      <figure class="vignette"><img src="img/sketchup-web-terrasse.jpg" width="800" height="600" loading="lazy" alt="La terrasse carrelée et ses chaises dans SketchUp pour le web"><figcaption><b>La terrasse</b><span>Textures, composants, calques</span></figcaption></figure>
+      <figure class="vignette"><img src="img/sketchup-web-chaise-detail.jpg" width="800" height="600" loading="lazy" alt="Une chaise vue de près dans SketchUp pour le web"><figcaption><b>Une chaise de près</b><span>Matériaux et accoudoir</span></figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="bloc" id="limites">
+  <div class="conteneur">
+    <div class="titre-section">
+      <span class="label">Limites connues</span>
+      <h2>Ce qu'il faut savoir avant de s'en servir.</h2>
+    </div>
+    <ul class="limites">
+      <li><b>Windows 64 bits seulement.</b> Les bibliothèques compilées jointes sont celles de Windows et de Python 3.13, la version de Blender 5.1 et 5.2. Essais menés sur la 5.2.3 LTS.</li>
+      <li><b>Surfaces texturées.</b> Elles gardent leur triangulation et leurs diagonales dans SketchUp. Les surfaces unies sont fusionnées.</li>
+      <li><b>Collections instanciées.</b> Une collection instanciée s'exporte comme un seul composant, pas comme une hiérarchie de sous-composants.</li>
+      <li><b>Objets non exportés.</b> Nuages de points, volumes, crayons gras et cheveux. Courbes, textes et surfaces sont exportés en maillage évalué.</li>
+      <li><b>Très gros fichiers.</b> Un import coûte environ 30 fois la taille du fichier en mémoire, et supprimer ensuite des centaines de milliers d'objets est lent&nbsp;: c'est le comportement de Blender.</li>
+      <li><b>Très gros modèles dans SketchUp.</b> Les fichiers lourds du banc de charge (jusqu'à 85&nbsp;Mo) ont été relus dans Blender, pas dans SketchUp. Leur confort d'affichage dans SketchUp reste à vérifier.</li>
+      <li><b>Format écrit.</b> Les fichiers sont au format SketchUp 2017, que les versions plus récentes ouvrent. Vérifié dans SketchUp pour le web, pas encore dans SketchUp Desktop.</li>
+      <li><b>Fichiers récents.</b> La lecture des fichiers SketchUp 2021 et suivants repose sur openskp. Nos essais ont porté sur des fichiers de l'extension et sur des fichiers enregistrés par SketchUp en version 26.1.</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="conteneur">
+    <div class="pied">
+      <div>
+        <a class="marque" href="#haut" aria-label="Haut de page">
+          <img src="img/arkedia3d-icone.png" width="40" height="40" alt="">
+          <span><span class="nom">ARKEDIA <b>3D</b></span><span class="accroche" style="display:block">Agence de numérisation 3D et visites virtuelles</span></span>
+        </a>
+        <p style="margin-top:18px">La première agence de numérisation LiDAR 16K et de visites virtuelles en Côte d'Ivoire.</p>
+      </div>
+      <div>
+        <h3>Contact</h3>
+        <p><a href="mailto:contact@arkedia3d.ci">contact@arkedia3d.ci</a></p>
+        <p><a href="https://www.arkedia3d.ci">www.arkedia3d.ci</a></p>
+        <p>Abidjan, Côte d'Ivoire</p>
+      </div>
+      <div>
+        <h3>Projet</h3>
+        <p><a data-repo href="https://github.com/">Code source et suivi des défauts</a></p>
+        <p><a href="extensions/arkedia_skp_bridge-0.2.0.zip" download>Télécharger la version 0.2.0</a></p>
+        <p>Licence GPL-3.0 ou ultérieure</p>
+      </div>
+    </div>
+    <p class="mentions">Le format .skp est lu et écrit par <a href="https://github.com/iamahsanmehmood/openskp">openskp</a> (Ahsan Mehmood, licence MIT), reconstitué sans le SDK de Trimble. L'extension s'inspire d'OpenSKP Import/Export et de Sketchup_Importer (RedHaloStudio), dont nous avons étudié le code. SketchUp est une marque de Trimble Inc.&nbsp;: ce projet n'est ni affilié à Trimble ni approuvé par elle.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var hote = location.hostname;
+  var m = hote.match(/^([^.]+)\.github\.io$/);
+  var morceaux = location.pathname.split("/").filter(Boolean);
+  var base = location.origin + location.pathname.replace(/[^\/]*$/, "");
+  var enLigne = (location.protocol === "http:" || location.protocol === "https:") && hote !== "localhost" && hote !== "127.0.0.1";
+  var el = document.getElementById("adresse");
+  var bouton = document.getElementById("copier");
+  if (enLigne) {
+    // l'adresse du dépôt d'extensions se déduit de celle de la page, que le site soit sur github.io ou ailleurs
+    if (el) { el.textContent = base + "extensions/index.json"; }
+  } else if (bouton) {
+    bouton.style.display = "none";
+  }
+  if (m && morceaux.length) {
+    var depot = "https://github.com/" + m[1] + "/" + morceaux[0];
+    document.querySelectorAll("[data-repo]").forEach(function (a) { a.href = depot; });
+  } else {
+    document.querySelectorAll("[data-repo]").forEach(function (a) { a.style.display = "none"; });
+  }
+  if (bouton) {
+    bouton.addEventListener("click", function () {
+      var texte = document.getElementById("adresse").textContent;
+      var fini = function () { bouton.textContent = "Copié"; setTimeout(function () { bouton.textContent = "Copier"; }, 1800); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(texte).then(fini, function () {});
+      } else {
+        var t = document.createElement("textarea");
+        t.value = texte; document.body.appendChild(t); t.select();
+        try { document.execCommand("copy"); fini(); } catch (e) {}
+        document.body.removeChild(t);
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>
