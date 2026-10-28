@@ -54,6 +54,7 @@ processus qui le dépasse et le consigne dans le résultat.
 | `texture:N` | N plans texturés (images aléatoires de 1 024 × 1 024 et 2 048 × 2 048 pixels) |
 | `unicode` | noms accentués, japonais, emoji, noms de 300 caractères, noms en double ou à caractères spéciaux, propriétés personnalisées très longues, un objet masqué |
 | `collinst` | collections instanciées : décalage d'instance, imbrication, miroir, échelle négative |
+| `pieces` | pièces façon Bonsai (volumes « IfcSpace/… » masqués, collés au sol, au plafond et aux murs) : trois rectangulaires, une en L, une qui contourne une trémie collée au mur. Export avec l'option pièces ; à la relecture, chacune doit être rentrée de 5 mm, nommée avec sa surface et rangée sur une étiquette masquée |
 
 Les mesures de mémoire sont celles de la mémoire engagée par le processus Blender, relevée toutes les 50 ms.
 

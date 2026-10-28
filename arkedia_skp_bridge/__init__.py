@@ -977,15 +977,326 @@ def _is_ifc_space(obj, ent):
 _SPACE_OPACITY = 0.2
 _SPACE_TAG_RGB = (0, 196, 204)
 _SPACE_DEFAULT_RGB = (140, 205, 235)
+# Retrait des faces des pièces : leurs faces tombent sur celles des sols, plafonds et murs, et SketchUp ne sait pas
+# laquelle dessiner devant (moirage). Dans SketchUp 2027, le moirage disparaît dès 1 mm sur la vue d'ensemble d'une
+# villa de 20 m ; 5 mm gardent de la marge pour un bâtiment plus grand ou une vue plus lointaine, très en deçà des
+# 2 cm du relevé.
+_SPACE_INSET_MM = 5.0
 
 
-def _space_label(obj, info):
-    """Nom SketchUp d'une pièce : « Pièce 01 Chambre » (numéro et nom long IFC), sinon le nom de l'objet."""
+def _fr_area(area_m2):
+    """« 5,69 m² » : deux décimales, virgule, espace insécable avant l'unité."""
+    return f"{area_m2:.2f}".replace(".", ",") + " m²"
+
+
+def _space_label(obj, info, area_m2=None):
+    """Nom SketchUp d'une pièce : « Pièce 01 Chambre » (numéro et nom long IFC), sinon le nom de l'objet.
+
+    Avec une surface : « Pièce 01 Chambre, 5,69 m² ».
+    """
     parts = [str(x) for x in (info.get("ifc_name"), info.get("ifc_long_name")) if x]
     if parts:
-        return "Pièce " + " ".join(parts)
-    name = obj.name.split("/", 1)[1] if obj.name.startswith("IfcSpace/") else obj.name
-    return "Pièce " + name
+        label = "Pièce " + " ".join(parts)
+    else:
+        name = obj.name.split("/", 1)[1] if obj.name.startswith("IfcSpace/") else obj.name
+        label = "Pièce " + name
+    if area_m2 is not None and area_m2 > 0:
+        label += ", " + _fr_area(area_m2)
+    return label
+
+
+def _ifc_space_area_m2(ent, tool):
+    """Surface de la pièce dans l'IFC (Qto_SpaceBaseQuantities : NetFloorArea, sinon GrossFloorArea), en m²."""
+    if ent is None or tool is None:
+        return None
+    try:
+        import ifcopenshell.util.element as ue
+
+        qto = (ue.get_psets(ent, qtos_only=True) or {}).get("Qto_SpaceBaseQuantities") or {}
+        value = qto.get("NetFloorArea") or qto.get("GrossFloorArea")
+        if not value:
+            return None
+        scale = 1.0
+        try:
+            import ifcopenshell.util.unit as uu
+
+            scale = float(uu.calculate_unit_scale(tool.Ifc.get(), "AREAUNIT"))
+        except Exception:
+            pass
+        area = float(value) * scale
+        return area if area > 0 else None
+    except Exception:
+        return None
+
+
+def _mesh_floor_area_m2(mesh, matrix_world, unit_factor):
+    """Surface au sol d'un volume : projection horizontale des faces tournées vers le bas, en m²."""
+    import numpy as np
+
+    A = _mesh_arrays(mesh)
+    if not A["n_poly"]:
+        return None
+    M = np.array(matrix_world, dtype=np.float64)
+    co = A["co"] @ M[:3, :3].T + M[:3, 3]
+    lv, ls, lt = A["lv"], A["lstart"], A["ltotal"]
+    poly_of_loop = np.repeat(np.arange(A["n_poly"]), lt)
+    idx = np.arange(len(lv))
+    last = (ls + lt - 1)[poly_of_loop]
+    nxt = np.where(idx == last, ls[poly_of_loop], idx + 1)
+    N = np.zeros((A["n_poly"], 3))
+    np.add.at(N, poly_of_loop, np.cross(co[lv], co[lv[nxt]]))
+    lens = np.linalg.norm(N, axis=1)
+    down = (N[:, 2] < 0) & (np.abs(N[:, 2]) > 0.94 * np.maximum(lens, 1e-30))
+    area_bu = 0.5 * float(np.abs(N[down, 2]).sum())
+    return area_bu / (unit_factor * unit_factor) if area_bu > 0 else None
+
+
+def _inset_offsets(co, lv, lstart, ltotal, d, weld=1e-6):
+    """Déplacements qui rentrent chaque face d'un volume fermé de `d` le long de sa normale.
+
+    `co` : sommets (n, 3) ; `lv`, `lstart`, `ltotal` : boucles des polygones, comme dans Blender. Les sommets
+    confondus à `weld` près sont traités ensemble. Chaque sommet recule pour que tous les plans qui le touchent
+    reculent de `d` (moindres carrés, solution de norme minimale) : sur un prisme, même à murs obliques ou à angle
+    rentrant, les faces restent planes et gardent leurs angles. Renvoie None si le volume n'est pas fermé et
+    orienté de façon cohérente, si un sommet devait bouger de plus de 4 `d` (pointe aiguë) ou si une face se
+    retournerait (pièce plus mince que 2 `d`).
+    """
+    import numpy as np
+
+    co = np.asarray(co, dtype=np.float64)
+    lv = np.asarray(lv, dtype=np.int64)
+    lstart = np.asarray(lstart, dtype=np.int64)
+    ltotal = np.asarray(ltotal, dtype=np.int64)
+    n_poly = len(lstart)
+    if d <= 0 or n_poly < 4 or len(co) < 4:
+        return None
+    # sommets soudés par position
+    q = np.round(co / weld).astype(np.int64)
+    _u, wid = np.unique(q, axis=0, return_inverse=True)
+    wid = wid.reshape(-1)
+    nw = int(wid.max()) + 1
+    lw = wid[lv]
+    poly_of_loop = np.repeat(np.arange(n_poly), ltotal)
+    idx = np.arange(len(lv))
+    last = (lstart + ltotal - 1)[poly_of_loop]
+    nxt = np.where(idx == last, lstart[poly_of_loop], idx + 1)
+    a, b = lw, lw[nxt]
+    if (a == b).any():
+        return None
+    # volume fermé et orienté : chaque arête parcourue une fois dans chaque sens
+    fwd = a * nw + b
+    rev = b * nw + a
+    uniq, cnt = np.unique(fwd, return_counts=True)
+    if (cnt != 1).any() or not np.isin(rev, uniq).all():
+        return None
+    # normales de Newell (polygones quelconques), sens donné par le signe du volume
+    N = np.zeros((n_poly, 3))
+    np.add.at(N, poly_of_loop, np.cross(co[lv], co[lv[nxt]]))
+    vol = float(np.einsum("ij,ij->i", N, co[lv[lstart]]).sum()) / 6.0
+    if abs(vol) < 1e-15:
+        return None
+    lens = np.linalg.norm(N, axis=1)
+    ok = lens > 1e-18
+    nrm = np.zeros_like(N)
+    nrm[ok] = N[ok] / lens[ok, None]
+    if vol < 0:
+        nrm = -nrm
+    # plans distincts autour de chaque sommet soudé
+    order = np.argsort(lw, kind="stable")
+    polys_sorted = poly_of_loop[order]
+    bounds = np.searchsorted(lw[order], np.arange(nw + 1))
+    disp_w = np.zeros((nw, 3))
+    lim = 4.0 * d
+    for w in range(nw):
+        cand = nrm[np.unique(polys_sorted[bounds[w]:bounds[w + 1]])]
+        planes = []
+        for n in cand:
+            if float(n @ n) > 0.25 and all(abs(float(n @ m)) < 1.0 - 1e-9 for m in planes):
+                planes.append(n)
+        if not planes:
+            continue
+        P = np.array(planes)
+        v = np.linalg.lstsq(P, np.full(len(P), -d), rcond=None)[0]
+        if not np.isfinite(v).all() or float(np.linalg.norm(v)) > lim:
+            return None
+        disp_w[w] = v
+    disp = disp_w[wid]
+    # contrôle : volume réduit, aucune face retournée
+    co2 = co + disp
+    N2 = np.zeros((n_poly, 3))
+    np.add.at(N2, poly_of_loop, np.cross(co2[lv], co2[lv[nxt]]))
+    vol2 = float(np.einsum("ij,ij->i", N2, co2[lv[lstart]]).sum()) / 6.0
+    if vol2 * vol <= 0 or abs(vol2) >= abs(vol):
+        return None
+    if (np.einsum("ij,ij->i", N2[ok], N[ok]) <= 0).any():
+        return None
+    return disp
+
+
+def _inset_prism(co, lv, lstart, ltotal, d, slope_cos=0.94, vert_tol=0.02):
+    """Pièce « 2,5D » (murs verticaux, sol et plafond plans ou en pente douce) rentrée de `d`, en coordonnées
+    monde : l'emprise est décalée par shapely, ce qui supprime aussi un étranglement plus mince que 2 `d` (pièce
+    qui contourne une trémie collée à un mur), puis le volume est reconstruit entre le sol et le plafond, chacun
+    remonté ou abaissé de `d`. Renvoie (sommets (n, 3), faces) ou None si la pièce n'a pas cette forme.
+    """
+    import numpy as np
+
+    try:
+        import shapely
+        from shapely.geometry import Polygon
+        from shapely.geometry.polygon import orient
+    except Exception:
+        return None
+    co = np.asarray(co, dtype=np.float64)
+    lv = np.asarray(lv, dtype=np.int64)
+    lstart = np.asarray(lstart, dtype=np.int64)
+    ltotal = np.asarray(ltotal, dtype=np.int64)
+    n_poly = len(lstart)
+    if d <= 0 or n_poly < 4:
+        return None
+    poly_of_loop = np.repeat(np.arange(n_poly), ltotal)
+    idx = np.arange(len(lv))
+    last = (lstart + ltotal - 1)[poly_of_loop]
+    nxt = np.where(idx == last, lstart[poly_of_loop], idx + 1)
+    N = np.zeros((n_poly, 3))
+    np.add.at(N, poly_of_loop, np.cross(co[lv], co[lv[nxt]]))
+    vol = float(np.einsum("ij,ij->i", N, co[lv[lstart]]).sum()) / 6.0
+    if abs(vol) < 1e-12:
+        return None
+    if vol < 0:
+        N = -N
+    lens = np.linalg.norm(N, axis=1)
+    live = lens > 1e-14
+    nz = np.zeros(n_poly)
+    nz[live] = N[live, 2] / lens[live]
+    floor = live & (nz < -slope_cos)
+    ceil = live & (nz > slope_cos)
+    wall = live & (np.abs(nz) < vert_tol)
+    if not floor.any() or not ceil.any() or (live & ~(floor | ceil | wall)).any():
+        return None
+    union_all = getattr(shapely, "union_all", None)
+    if union_all is None:
+        from shapely.ops import unary_union as union_all
+
+    def footprint(mask):
+        polys = []
+        for p in np.nonzero(mask)[0].tolist():
+            ring = co[lv[lstart[p]:lstart[p] + ltotal[p]], :2]
+            g = Polygon(ring)
+            if not g.is_valid:
+                g = g.buffer(0)
+            if g.area > 0:
+                polys.append(g)
+        return union_all(polys) if polys else None
+
+    fl, ce = footprint(floor), footprint(ceil)
+    if fl is None or ce is None or fl.area <= 0:
+        return None
+    if fl.symmetric_difference(ce).area > 1e-6 * max(fl.area, 1.0) + 1e-8:
+        return None  # plafond et sol d'emprises différentes : pas un prisme
+    inset = fl.buffer(-d, join_style=2, mitre_limit=5.0)
+    if inset.is_empty:
+        return None
+    parts = [inset] if inset.geom_type == "Polygon" else [g for g in getattr(inset, "geoms", []) if g.geom_type == "Polygon"]
+    parts = [orient(g, 1.0) for g in parts if g.area > (2 * d) ** 2]
+    if not parts:
+        return None
+
+    # plans du sol et du plafond : (normale unitaire, point) par polygone
+    def planes(mask):
+        out = []
+        for p in np.nonzero(mask)[0].tolist():
+            ring = co[lv[lstart[p]:lstart[p] + ltotal[p]]]
+            out.append((N[p] / lens[p], ring[0], Polygon(ring[:, :2])))
+        return out
+
+    fl_planes, ce_planes = planes(floor), planes(ceil)
+
+    def z_on(planes_, x, y, shift):
+        from shapely.geometry import Point
+        pt = Point(x, y)
+        best = min(planes_, key=lambda t: t[2].distance(pt))
+        n, p0, _g = best
+        z = p0[2] - (n[0] * (x - p0[0]) + n[1] * (y - p0[1])) / n[2]
+        return z + shift / abs(n[2])
+
+    verts, faces = [], []
+    for part in parts:
+        rings = [list(part.exterior.coords)[:-1]] + [list(r.coords)[:-1] for r in part.interiors]
+        index = {}
+        ring_ids = []
+        for ring in rings:
+            ids = []
+            for x, y in ring:
+                key = (round(x, 9), round(y, 9))
+                if key in index:
+                    ids.append(index[key])
+                    continue
+                zb = z_on(fl_planes, x, y, +d)
+                zt = z_on(ce_planes, x, y, -d)
+                if zt - zb <= 0:
+                    return None
+                index[key] = len(verts)
+                verts.append((x, y, zb))
+                verts.append((x, y, zt))
+                ids.append(index[key])
+            ring_ids.append(ids)
+        tris = shapely.constrained_delaunay_triangles(part)
+        for t in getattr(tris, "geoms", []):
+            c = list(t.exterior.coords)[:-1]
+            if len(c) != 3:
+                continue
+            try:
+                ids = [index[(round(x, 9), round(y, 9))] for x, y in c]
+            except KeyError:
+                return None  # point ajouté par la triangulation : on renonce
+            (x0, y0), (x1, y1), (x2, y2) = c
+            ccw = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0) > 0
+            if not ccw:
+                ids = ids[::-1]
+            faces.append([ids[2], ids[1], ids[0]])          # sol, normale vers le bas
+            faces.append([ids[0] + 1, ids[1] + 1, ids[2] + 1])  # plafond, normale vers le haut
+        for ids in ring_ids:
+            m = len(ids)
+            for i in range(m):
+                a, b = ids[i], ids[(i + 1) % m]
+                faces.append([a, b, b + 1, a + 1])
+    return np.array(verts), faces
+
+
+def _inset_space(mesh, matrix_world, d):
+    """Rentre une pièce de `d` unités Blender, mesurées dans le repère du monde.
+
+    D'abord sommet par sommet, ce qui garde le maillage d'origine ; sinon, pour une pièce à murs verticaux, par
+    reconstruction depuis son emprise décalée. Renvoie (méthode, maillage) : (« sommets », le maillage temporaire
+    modifié sur place), (« emprise », un nouveau maillage à supprimer après usage) ou (None, None).
+    """
+    import numpy as np
+
+    A = _mesh_arrays(mesh)
+    if not A["n_poly"]:
+        return None, None
+    M = np.array(matrix_world, dtype=np.float64)
+    try:
+        Minv = np.linalg.inv(M)
+    except Exception:
+        return None, None
+    co_w = A["co"] @ M[:3, :3].T + M[:3, 3]
+    disp = _inset_offsets(co_w, A["lv"], A["lstart"], A["ltotal"], d)
+    if disp is not None:
+        loc = (co_w + disp) @ Minv[:3, :3].T + Minv[:3, 3]
+        mesh.vertices.foreach_set("co", loc.astype(np.float32).ravel())
+        mesh.update()
+        return "sommets", mesh
+    rebuilt = _inset_prism(co_w, A["lv"], A["lstart"], A["ltotal"], d)
+    if rebuilt is None:
+        return None, None
+    verts, faces = rebuilt
+    loc = verts @ Minv[:3, :3].T + Minv[:3, 3]
+    tmp = bpy.data.meshes.new("_arkedia_piece_rentree")
+    tmp.from_pydata([tuple(float(c) for c in p) for p in loc], [], faces)
+    tmp.update()
+    return "emprise", tmp
 
 
 def _space_layer(mode, info):
@@ -2021,11 +2332,14 @@ _SOFTEN_MIN_FACES = 2000
 def _export_skp_impl(filepath, context, only_selected=True, use_components=True, use_modifiers=True,
                      layer_mode="COLLECTION", use_textures=True, store_attributes=True, export_psets=True,
                      merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
-                     soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True):
+                     soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True,
+                     space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True):
     from openskp import create
 
     t0 = time.time()
     k = _scene_k(context)
+    uf = _unit_factor(context)
+    inset_bu = max(0.0, float(space_inset_mm or 0.0)) * 1e-3 * uf
     soften = {"angle": min(89.0, max(1.0, float(soften_angle))), "min_faces": _SOFTEN_MIN_FACES} if soften_dense else None
     depsgraph = context.evaluated_depsgraph_get()
 
@@ -2145,6 +2459,9 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 space_handle[mat.name] = builder.add_material(name, rgb, opacity=op)
         stats["materials"] = len(handle_by_mat) + len(space_handle) + (1 if space_default is not None else 0)
         stats["spaces"] = len(spaces)
+        stats["spaces_inset"] = 0
+        stats["spaces_not_inset"] = []
+        stats["space_inset_mm"] = round(inset_bu / uf * 1e3, 3) if spaces else 0.0
 
         # 2) infos IFC + calques (avant les définitions)
         infos, psets, layer_of = {}, {}, {}
@@ -2286,20 +2603,41 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 stats["objects_skipped"] += 1
                 continue
             holder, mesh = evaluated_mesh(obj)
+            rebuilt = None
             try:
                 if not len(mesh.polygons):
                     stats["objects_skipped"] += 1
                     continue
                 if obj.type == "MESH" and obj.data is not None and len(obj.data.color_attributes):
                     vertex_color_objects += 1
+                name = group_name(obj)
+                out_mesh = mesh
+                if obj.name in spaces:
+                    # surface exacte dans le nom (avant le retrait), puis faces rentrées contre le moirage
+                    if space_area_in_name:
+                        area = _ifc_space_area_m2(_ifc_entity(tool, obj), tool)
+                        if area is None:
+                            area = _mesh_floor_area_m2(mesh, obj.matrix_world, uf)
+                        name = _space_label(obj, infos.get(obj.name, {}), area)
+                    if inset_bu > 0:
+                        how, out = _inset_space(mesh, obj.matrix_world, inset_bu)
+                        if how is None:
+                            stats["spaces_not_inset"].append(name)
+                        else:
+                            stats["spaces_inset"] += 1
+                            if how == "emprise":
+                                rebuilt = out_mesh = out
+                                stats["spaces_rebuilt"] = stats.get("spaces_rebuilt", 0) + 1
                 trans, m3 = transform_args(obj)
                 kw = attribute_kwargs(obj)
-                with builder.add_group(_su(group_name(obj)), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
-                    _write_mesh(grp, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
+                with builder.add_group(_su(name), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
+                    _write_mesh(grp, out_mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
                 stats["groups"] += 1
                 stats["objects"] += 1
             finally:
                 holder.to_mesh_clear()
+                if rebuilt is not None:
+                    bpy.data.meshes.remove(rebuilt)
 
         # 6) instances : maillages partagés, puis collections instanciées
         for obj, definition in placed_later:
@@ -2387,6 +2725,11 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
             "convertir en texture (cuisson) avant l'export")
     if ignored:
         stats["warnings"].append(f"{len(ignored)} objet(s) de type non géré ignoré(s) (crayon gras, volume, nuage de points, cheveux)")
+    if stats.get("spaces_not_inset"):
+        noms = ", ".join(stats["spaces_not_inset"][:4]) + ("…" if len(stats["spaces_not_inset"]) > 4 else "")
+        stats["warnings"].append(
+            f"{len(stats['spaces_not_inset'])} pièce(s) gardée(s) sans retrait (volume non fermé ou trop mince) : "
+            f"{noms} ; leurs faces peuvent scintiller avec les sols et les murs dans SketchUp")
     if stats["faces"] > 500_000:
         stats["warnings"].append(
             f"modèle lourd ({stats['faces']} faces) : SketchUp devient lent au-delà de 500 000 faces ; "
@@ -2476,14 +2819,28 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         name="Pièces (IfcSpace)",
         description=(
             "Exporter aussi les volumes de pièces d'un projet Bonsai, même masqués : translucides, nommés « Pièce 01 "
-            "Chambre », sur une étiquette « Pièces - <niveau> ». Avec « Sélection uniquement », seules les pièces des "
-            "niveaux sélectionnés"
+            "Chambre, 5,69 m² », sur une étiquette « Pièces - <niveau> ». Avec « Sélection uniquement », les pièces "
+            "sélectionnées et celles des niveaux touchés par la sélection"
         ),
         default=False,
     )
     hide_spaces: BoolProperty(
         name="Étiquette des pièces masquée à l'ouverture",
         description="Les pièces sont dans le fichier ; un clic sur leur étiquette dans SketchUp les affiche",
+        default=True,
+    )
+    space_inset: FloatProperty(
+        name="Retrait des pièces (mm)",
+        description=(
+            "Rentre les faces de chaque pièce de cette distance. Sans retrait, elles tombent sur les sols, plafonds "
+            "et murs, et SketchUp les fait scintiller (moirage). Les surfaces et volumes exacts restent dans le nom "
+            "de la pièce et dans ses attributs IFC. 0 : volumes exacts"
+        ),
+        default=_SPACE_INSET_MM, min=0.0, max=50.0, precision=1,
+    )
+    space_area_in_name: BoolProperty(
+        name="Surface dans le nom des pièces",
+        description="Ajoute la surface de la pièce (NetFloorArea de l'IFC) à son nom : « Pièce 01 Chambre, 5,69 m² »",
         default=True,
     )
     merge_planar: BoolProperty(
@@ -2540,6 +2897,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 merge_planar=self.merge_planar, view_mode=self.view_mode,
                 soften_dense=self.soften_dense, soften_angle=self.soften_angle, units=self.units,
                 export_spaces=self.export_spaces, hide_spaces=self.hide_spaces,
+                space_inset_mm=self.space_inset, space_area_in_name=self.space_area_in_name,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -2560,7 +2918,8 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
             if s.get("spaces"):
                 where = ", ".join(s.get("space_layers") or []) or "sans étiquette"
                 hidden = " (masquées à l'ouverture)" if s.get("space_layers_hidden") else ""
-                self.report({"INFO"}, f"{s['spaces']} pièce(s) exportée(s) : {where}{hidden}")
+                inset = f", rentrées de {s['space_inset_mm']:g} mm" if s.get("spaces_inset") else ""
+                self.report({"INFO"}, f"{s['spaces']} pièce(s) exportée(s) : {where}{hidden}{inset}")
             else:
                 self.report({"WARNING"}, "aucune pièce (IfcSpace) trouvée dans la scène")
         for w in s["warnings"]:

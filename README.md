@@ -35,8 +35,9 @@ Un mur percé de fenêtres, une dalle trouée ou un sol carrelé s'ouvrent dans 
 triangulation. Un terrain ou un maillage issu d'un scan reçoit des arêtes douces et s'affiche ombré au lieu de noir.
 Les longueurs s'affichent dans l'unité de la scène Blender (2,80 m au lieu de 9' 2 1/4"). Quand le projet vient de
 Bonsai, la classe IFC, le GlobalId, le nom, le niveau et les jeux de propriétés passent dans les attributs SketchUp,
-et les pièces (IfcSpace) peuvent partir aussi : translucides, nommées « Pièce 01 Chambre », sur une étiquette par
-niveau masquée à l'ouverture. Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide
+et les pièces (IfcSpace) peuvent partir aussi : translucides, nommées avec leur surface (« Pièce 01 Chambre,
+28,38 m² »), rentrées de 5 mm pour ne pas scintiller avec les sols et les murs, sur une étiquette par niveau
+masquée à l'ouverture. Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide
 près de l'origine.
 
 L'extension fonctionne dans un Blender dont l'interface est en français : elle ne cherche jamais un nœud de shader
@@ -62,7 +63,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.2.2.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.2.3.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -104,8 +105,10 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Textures image | Écrit les textures des matériaux (actif) |
 | Attributs (classe, GlobalId, nom IFC) | Dictionnaire d'attributs « ARKEDIA » sur chaque objet, avec les propriétés personnalisées en `custom_*` (actif) |
 | Jeux de propriétés IFC | Un dictionnaire `IFC_<jeu>` par jeu de propriétés Bonsai (actif) |
-| Pièces (IfcSpace) | Exporte aussi les volumes de pièces d'un projet Bonsai, même masqués : translucides, nommés « Pièce 01 Chambre », sur une étiquette par niveau, « Pièces - Rez-de-chaussée » par exemple. Avec « Sélection uniquement », les pièces sélectionnées et celles des niveaux de la sélection (inactif) |
+| Pièces (IfcSpace) | Exporte aussi les volumes de pièces d'un projet Bonsai, même masqués : translucides, nommés « Pièce 01 Chambre, 28,38 m² », sur une étiquette par niveau, « Pièces - Rez-de-chaussée » par exemple. Avec « Sélection uniquement », les pièces sélectionnées et celles des niveaux de la sélection (inactif) |
 | Étiquette des pièces masquée à l'ouverture | Les pièces sont dans le fichier, leur étiquette est décochée ; un clic dans SketchUp les affiche (actif) |
+| Retrait des pièces (mm) | Rentre les faces de chaque pièce de cette distance, 5 mm par défaut. Sans retrait, elles tombent sur les sols, les plafonds et les murs, et SketchUp les fait scintiller (moirage). 0 : volumes exacts |
+| Surface dans le nom des pièces | Ajoute au nom la surface de l'IFC (NetFloorArea), mesurée avant le retrait : « Pièce 01 Chambre, 28,38 m² » (actif) |
 | Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
 | Adoucir les maillages denses | Arêtes douces entre faces voisines pour les objets de 2 000 faces et plus (terrain, maillage de scan). Sans elles, SketchUp trace chaque arête et le maillage paraît noir (actif) |
 | Angle d'adoucissement | 35 degrés par défaut. À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées |
@@ -276,9 +279,10 @@ python tests\summarize.py resultats
   texture continue sont fusionnées.
 - Une collection instanciée dans Blender s'exporte comme un seul composant (tous ses objets réunis dans la
   définition), pas comme une hiérarchie de sous-composants.
-- Les pièces (IfcSpace) ont des faces qui coïncident avec les sols et les plafonds : quand leur étiquette est
-  affichée, un moirage apparaît là où elles se superposent. On l'affiche pour lire surfaces et volumes, on la masque
-  pour travailler sur le bâtiment.
+- Les pièces (IfcSpace) sont rentrées de 5 mm pour ne pas scintiller avec les sols et les murs : une face mesurée à
+  la main dans SketchUp donne donc un peu moins que la surface du métré, qui est dans le nom de la pièce, et le volume
+  affiché perd moins de 1 %. Une pièce qui n'est pas un volume fermé part sans retrait, avec un avertissement, et
+  peut scintiller.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "arkedia_skp_bridge"
-version = "0.2.2"
+version = "0.2.3"
 name = "Arkedia SKP Bridge"
 tagline = "Import/export SketchUp (.skp) pour le flux scan vers CAO/BIM"
 maintainer = "ARKEDIA 3D <contact@arkedia3d.ci>"

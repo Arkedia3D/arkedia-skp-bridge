@@ -517,11 +517,97 @@ def build_collinst(param):
     return {"instances": 6}
 
 
+def _prism_from_polygon(poly, z0, z1):
+    """Volume fermé et orienté vers l'extérieur : un polygone shapely (trous compris) extrudé de z0 à z1."""
+    import shapely
+    from shapely.geometry.polygon import orient
+    poly = orient(poly, 1.0)
+    rings = [list(poly.exterior.coords)[:-1]] + [list(r.coords)[:-1] for r in poly.interiors]
+    V, idx, F = [], {}, []
+    for ring in rings:
+        for x, y in ring:
+            if (x, y) not in idx:
+                idx[(x, y)] = len(V)
+                V.append((x, y, z0))
+                V.append((x, y, z1))
+    for t in shapely.constrained_delaunay_triangles(poly).geoms:
+        c = list(t.exterior.coords)[:-1]
+        ids = [idx[q] for q in c]
+        (x0, y0), (x1, y1), (x2, y2) = c
+        if (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0) < 0:
+            ids = ids[::-1]
+        F.append((ids[2], ids[1], ids[0]))
+        F.append((ids[0] + 1, ids[1] + 1, ids[2] + 1))
+    for ring in rings:
+        ids = [idx[q] for q in ring]
+        for i in range(len(ids)):
+            a, b = ids[i], ids[(i + 1) % len(ids)]
+            F.append((a, b, b + 1, a + 1))
+    return np.array(V, float), F
+
+
+def build_pieces(param):
+    """Pièces façon Bonsai : volumes « IfcSpace/… » masqués, collés au sol et aux murs (même plan, d'où le moirage),
+    trois pièces rectangulaires, une en L et une qui contourne une trémie collée au mur (étranglement de 0,1 mm).
+    Exportées avec l'option pièces : chacune doit revenir rentrée de 5 mm, nommée avec sa surface, sur une
+    étiquette masquée ; le bâti ne bouge pas."""
+    from shapely.geometry import Polygon
+    ms = mats(2)
+    piece = bpy.data.materials.new("Pièce")
+    piece.diffuse_color = (0.55, 0.8, 0.92, 0.15)
+    h, e = 2.7, 0.2
+    rooms = {
+        "IfcSpace/01": Polygon([(0, 0), (4, 0), (4, 3), (0, 3)]),
+        "IfcSpace/02": Polygon([(4.2, 0), (8.2, 0), (8.2, 3), (4.2, 3)]),
+        "IfcSpace/03": Polygon([(8.4, 0), (12.4, 0), (12.4, 3), (8.4, 3)]),
+        "IfcSpace/04": Polygon([(0, 3.2), (5, 3.2), (5, 5.2), (2, 5.2), (2, 7.2), (0, 7.2)]),
+        "IfcSpace/05": Polygon([(5.2, 3.2), (12.4, 3.2), (12.4, 7.2), (5.2, 7.2)],
+                               [[(7, 5), (9.5, 5), (9.5, 7.1999), (7, 7.1999)]]),
+    }
+    expected = {}
+    bati = colls(1, "Bati")[0]
+    # dalle sous toutes les pièces, dessus à z = 0 ; plafond au-dessus, dessous à z = h
+    Vd, Fd = box_arrays(12.4 + 2 * e, 7.2 + 2 * e, 0.2, ox=-e, oy=-e, oz=-0.2)
+    sl = bpy.data.objects.new("Dalle", mesh_from("Dalle", Vd, Fd))
+    sl.data.materials.append(ms[0])
+    link(sl, bati)
+    Vp, Fp = box_arrays(12.4 + 2 * e, 7.2 + 2 * e, 0.2, ox=-e, oy=-e, oz=h)
+    pl = bpy.data.objects.new("Plafond", mesh_from("Plafond", Vp, Fp))
+    pl.data.materials.append(ms[0])
+    link(pl, bati)
+    # un mur contre chaque côté de chaque pièce (face intérieure confondue avec la pièce)
+    nmur = 0
+    for nm, poly in rooms.items():
+        ring = list(poly.exterior.coords)
+        for (x0, y0), (x1, y1) in zip(ring[:-1], ring[1:]):
+            dx, dy = x1 - x0, y1 - y0
+            L = math.hypot(dx, dy)
+            Vw, Fw = box_arrays(L, 0.1, h, oy=-0.1)
+            ang = math.atan2(dy, dx)
+            ob = bpy.data.objects.new("Mur_%d" % nmur, mesh_from("Mur_%d" % nmur, Vw, Fw))
+            ob.data.materials.append(ms[1])
+            ob.location = (x0, y0, 0)
+            ob.rotation_euler = (0, 0, ang)
+            link(ob, bati)
+            nmur += 1
+        V, F = _prism_from_polygon(poly, 0.0, h)
+        ob = bpy.data.objects.new(nm, mesh_from(nm, V, F))
+        ob.data.materials.append(piece)
+        link(ob, bati)
+        ob.hide_set(True)
+        ob.hide_viewport = True
+        x0, y0, x1, y1 = poly.bounds
+        expected["Pièce " + nm.split("/", 1)[1]] = {"dims": [x1 - x0, y1 - y0, h], "aire": round(poly.area, 2)}
+    return {"murs": nmur, "pieces_attendues": expected,
+            "export_kw": {"export_spaces": True, "hide_spaces": True}}
+
+
 BUILD = {
     "boxes": build_boxes, "inst": build_inst, "sphere": build_sphere, "gridflat": build_gridflat,
     "gridholes": build_gridholes, "terrain": build_terrain, "degenerate": build_degenerate,
     "transforms": build_transforms, "mm": build_mm, "modifiers": build_modifiers,
     "texture": build_texture, "unicode": build_unicode, "mod": build_mod, "collinst": build_collinst,
+    "pieces": build_pieces,
 }
 
 
@@ -582,6 +668,35 @@ def compare(m0, m1, expected_loss=0.0):
     return out
 
 
+def check_pieces(attendues, inset_mm):
+    """Pièces relues : nom « Pièce 01, 12,00 m² », retrait mesuré sur la boîte englobante, collection masquée."""
+    out = {"attendues": len(attendues), "trouvees": 0, "retraits_mm": [], "noms": [], "masquees": True, "ok": False}
+    d = inset_mm / 1000.0
+    ok = True
+    for ob in bpy.data.objects:
+        if ob.type != "MESH" or not ob.name.startswith("Pièce "):
+            continue
+        base, _, surf = ob.name.partition(", ")
+        ref = attendues.get(base)
+        if ref is None:
+            continue
+        out["trouvees"] += 1
+        out["noms"].append(ob.name)
+        want = ("%.2f" % ref["aire"]).replace(".", ",") + "\u00a0m²"
+        if surf != want:
+            ok = False
+        pts = [ob.matrix_world @ mathutils.Vector(c) for c in ob.bound_box]
+        dims = [max(p[i] for p in pts) - min(p[i] for p in pts) for i in range(3)]
+        r = [round((ref["dims"][i] - dims[i]) / 2 * 1000, 3) for i in range(3)]
+        out["retraits_mm"].append(r)
+        if any(abs(x - inset_mm) > 0.05 for x in r):
+            ok = False
+        if not any(c.hide_viewport for c in ob.users_collection):
+            out["masquees"] = False
+    out["ok"] = bool(ok and out["trouvees"] == out["attendues"] and out["masquees"])
+    return out
+
+
 def main():
     res = {"case": CASE, "param": PARAM, "status": "OK", "blender": bpy.app.version_string}
     path = os.path.join(OUTDIR, TAG + ".skp")
@@ -596,7 +711,8 @@ def main():
                 res["origine"] = measure()
             log("origine : %s" % json.dumps(res["origine"]))
             with Phase("export"):
-                res["export"] = A.export_skp(path, bpy.context, only_selected=False)
+                res["export"] = A.export_skp(path, bpy.context, only_selected=False,
+                                             **(res["build"] or {}).get("export_kw", {}))
             res["size_mb"] = round(os.path.getsize(path) / 2 ** 20, 3)
             log("export : %s" % json.dumps(res["export"], default=str))
             res["phases"] = dict(TIMES)
@@ -618,6 +734,12 @@ def main():
             with Phase("mesure_import"):
                 res["reimport"] = measure()
             res["comparaison"] = compare(res["origine"], res["reimport"], (res.get("build") or {}).get("expected_area_loss_m2", 0.0))
+            attendues = (res.get("build") or {}).get("pieces_attendues")
+            if attendues:
+                res["pieces"] = check_pieces(attendues, (res.get("export") or {}).get("space_inset_mm", 0.0))
+                log("pièces : %s" % json.dumps(res["pieces"], ensure_ascii=False))
+                if not res["pieces"]["ok"]:
+                    res["status"] = "ECART_PIECES"
             log("comparaison : %s" % json.dumps(res["comparaison"]))
             if MODE == "chain":
                 path2 = os.path.join(OUTDIR, TAG + "_2.skp")

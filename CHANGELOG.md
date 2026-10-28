@@ -1,5 +1,32 @@
 # Journal des modifications
 
+## 0.2.3, 28 octobre 2026 : pièces sans moirage, surface dans leur nom
+
+Les faces des pièces tombaient exactement sur les sols, les plafonds et les murs. SketchUp ne sait pas laquelle
+dessiner devant et les fait scintiller en rayures (moirage) dès qu'on affiche les pièces.
+
+### Export
+
+- Les faces de chaque pièce sont rentrées de 5 mm (option « Retrait des pièces (mm) », 0 pour garder les volumes
+  exacts). Chaque face recule le long de sa normale : murs obliques, angles rentrants et sols en pente gardent leur
+  forme. Une pièce qui contourne une trémie collée à un mur, avec un étranglement plus mince que 1 cm, est
+  reconstruite depuis son emprise décalée. Une pièce qui n'est pas un volume fermé part sans retrait, avec un
+  avertissement.
+- Nouvelle option « Surface dans le nom des pièces », active par défaut : « Pièce 01 Chambre, 28,38 m² ». La
+  surface est celle de l'IFC (NetFloorArea), sinon celle du sol du volume, mesurée avant le retrait. Une face mesurée
+  à la main dans SketchUp donne un peu moins, à cause des 5 mm ; le volume affiché perd moins de 1 %.
+
+### Vérifications
+
+- Dans SketchUp 2027, sur la villa de trois niveaux, les rayures de la terrasse du 2e étage disparaissent dès 1 mm
+  de retrait. Les 5 mm retenus gardent de la marge pour un bâtiment plus grand ou une vue plus lointaine.
+- Appartement et villa : 5 pièces sur 5 et 27 sur 27 rentrées de 5,0 mm sur chaque axe, dont une reconstruite depuis
+  son emprise. Surface du bâti inchangée, maillages de Blender intacts. Dans SketchUp 2027, toutes les pièces restent
+  des solides, nommées avec leur surface, sur leurs étiquettes masquées à l'ouverture.
+- Nouveau cas `pieces` dans la série d'essais, sans Bonsai : trois pièces rectangulaires, une en L et une à
+  étranglement, collées au sol, au plafond et aux murs. Série complète (12 cas) : surface et boîte englobante du bâti
+  identiques à l'original après l'aller-retour, volume à 1e-5 près, et les cinq pièces rentrées de 5,0 mm.
+
 ## 0.2.2, 27 octobre 2026 : pièces IFC et étiquettes de niveau
 
 Cette version vient de l'export de deux relevés modélisés dans Bonsai, un appartement d'un niveau et une villa sur
