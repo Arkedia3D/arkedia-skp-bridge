@@ -63,7 +63,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.2.3.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.3.0.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -101,7 +101,7 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Sélection uniquement | Sinon, tout ce qui est visible (actif par défaut) |
 | Maillages partagés en composants | Les objets qui partagent un maillage deviennent un composant et ses instances (actif) |
 | Appliquer les modificateurs | Exporte le résultat évalué (actif) |
-| Calques SketchUp | Collection Blender (défaut), niveau IFC (une étiquette au nom de chaque niveau), classe IFC ou aucun |
+| Calques SketchUp | Collection Blender (défaut), niveau IFC (une étiquette au nom de chaque niveau ; avec les scènes, plafonds et toitures à part : « Plafonds - 1er étage », « Toiture - 2e étage »), classe IFC ou aucun |
 | Textures image | Écrit les textures des matériaux (actif) |
 | Attributs (classe, GlobalId, nom IFC) | Dictionnaire d'attributs « ARKEDIA » sur chaque objet, avec les propriétés personnalisées en `custom_*` (actif) |
 | Jeux de propriétés IFC | Un dictionnaire `IFC_<jeu>` par jeu de propriétés Bonsai (actif) |
@@ -109,6 +109,9 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Étiquette des pièces masquée à l'ouverture | Les pièces sont dans le fichier, leur étiquette est décochée ; un clic dans SketchUp les affiche (actif) |
 | Retrait des pièces (mm) | Rentre les faces de chaque pièce de cette distance, 5 mm par défaut. Sans retrait, elles tombent sur les sols, les plafonds et les murs, et SketchUp les fait scintiller (moirage). 0 : volumes exacts |
 | Surface dans le nom des pièces | Ajoute au nom la surface de l'IFC (NetFloorArea), mesurée avant le retrait : « Pièce 01 Chambre, 28,38 m² » (actif) |
+| Noms des pièces en texte | Un texte SketchUp dans chaque pièce, son nom et sa surface sur deux lignes, au point le plus éloigné des murs. Il suit l'étiquette de la pièce et se lit dans les scènes « Plan » (actif) |
+| Scènes par niveau | Avec « Niveau IFC » : « Vue d'ensemble », puis pour chaque niveau une vue « 3D » en maison de poupée (niveaux supérieurs, plafonds et toiture masqués) et une vue « Plan » de dessus avec ses pièces et leurs noms, par exemple « 3D - 1er étage » et « Plan - 1er étage » (actif) |
+| Matière au verso des faces | Le verso de chaque face prend la matière du recto. Sans cela, SketchUp montre sa couleur de face arrière, un bleu-violet, au travers des vitrages et des pièces translucides (actif) |
 | Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
 | Adoucir les maillages denses | Arêtes douces entre faces voisines pour les objets de 2 000 faces et plus (terrain, maillage de scan). Sans elles, SketchUp trace chaque arête et le maillage paraît noir (actif) |
 | Angle d'adoucissement | 35 degrés par défaut. À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées |
@@ -133,7 +136,7 @@ bpy.ops.export_scene.arkedia_skp(
     layer_mode="IFC_STOREY",
 )
 
-# La même chose avec les pièces, sur leur étiquette masquée à l'ouverture
+# La même chose avec les pièces (étiquettes masquées à l'ouverture, noms en texte) et les scènes par niveau
 bpy.ops.export_scene.arkedia_skp(
     filepath=r"C:\livraisons\maison_pieces.skp",
     only_selected=False,
@@ -259,6 +262,12 @@ l'angle à 55 degrés les adoucit presque toutes.
 |---|---|
 | ![Terrain exporté sans adoucissement, ouvert dans SketchUp 2027](docs/img/sketchup-terrain-aretes.jpg) | ![Terrain exporté avec adoucissement, ouvert dans SketchUp 2027](docs/img/sketchup-terrain-adouci.jpg) |
 
+Avec la 0.3.0, la villa de trois niveaux et l'appartement ont été rouverts dans SketchUp 2027 et chaque scène activée
+par script. Les sept scènes de la villa et les trois de l'appartement masquent les bonnes étiquettes, les noms des
+pièces ne paraissent que dans les scènes « Plan » (11, 10 et 6 pour les trois niveaux de la villa), et aucune face
+visible n'a de verso sans matière : avec la couleur des faces arrière passée en magenta, la vue d'ouverture reste
+identique, sans une tache.
+
 ## Les essais
 
 Les scripts sont dans [`tests/`](tests/) et tournent sans interface, avec un profil Blender jetable pour ne pas
@@ -283,6 +292,12 @@ python tests\summarize.py resultats
   la main dans SketchUp donne donc un peu moins que la surface du métré, qui est dans le nom de la pièce, et le volume
   affiché perd moins de 1 %. Une pièce qui n'est pas un volume fermé part sans retrait, avec un avertissement, et
   peut scintiller.
+- Une scène ne garde pas de plan de coupe (limite d'openskp) : les scènes « Plan » regardent le niveau d'en haut,
+  niveaux supérieurs, plafonds et toiture masqués, sans coupe à 1,20 m. Elles sont cadrées pour une fenêtre de
+  proportion 16:10, nord en haut.
+- Les noms des pièces sont des textes SketchUp à taille d'écran : lisibles à tout zoom, ils commencent au point
+  choisi dans la pièce et peuvent se chevaucher dans les petites pièces voisines. Ils sont posés au-dessus de ce que
+  porte le niveau, si bien qu'en vue 3D, pièces affichées, ils flottent au-dessus des murs.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de

@@ -1,5 +1,53 @@
 # Journal des modifications
 
+## 0.3.0, 29 octobre 2026 : scènes par niveau, noms des pièces, fin des taches bleues
+
+Ouverte dans SketchUp, la villa de trois niveaux montrait des taches bleu-violet derrière les vitrages et sur les
+pièces translucides. Le verso des faces n'avait pas de matière : SketchUp le peint alors de la couleur « face
+arrière » de son style, que l'on voit au travers de tout ce qui est translucide.
+
+### Export
+
+- Nouvelle option « Matière au verso des faces », active par défaut : le verso de chaque face reçoit la matière de
+  son recto (sauf matière texturée). Les vitrages restent clairs et laissent voir l'intérieur.
+- Nouvelle option « Scènes par niveau », active par défaut avec « Niveau IFC ». Le fichier s'ouvre avec des onglets
+  de scènes : « Vue d'ensemble », puis pour chaque niveau une vue 3D en maison de poupée, niveaux supérieurs,
+  plafonds et toiture masqués (« 3D - 1er étage »), et une vue de dessus en projection parallèle, le niveau seul avec
+  ses pièces et leurs noms (« Plan - 1er étage »). Plafonds (IfcCovering CEILING) et toitures (IfcRoof, dalles ROOF)
+  passent sur leurs propres étiquettes, « Plafonds - 1er étage » ou « Toiture - 2e étage » par exemple, pour que les
+  scènes puissent les masquer.
+- Nouvelle option « Noms des pièces en texte », active par défaut avec les pièces : un texte SketchUp dans chaque
+  pièce, son nom puis sa surface (« Chambre », « 28,38 m² »), posé au point le plus éloigné des murs, même dans une
+  pièce en L, au-dessus de ce que porte le niveau pour ne pas passer sous un mur. Il suit l'étiquette de la pièce :
+  on le lit dans les scènes « Plan ».
+- Éclairage des scènes : une scène retient les réglages d'ombre, et SketchUp y active « Utiliser le soleil pour
+  l'ombrage ». Avec le soleil de 13 h 30 du gabarit, au sud-ouest, un clic sur un onglet passait les façades est et
+  sud en gris foncé. Le soleil est maintenant à 10 h (haut, à l'est-sud-est, du côté de la caméra des vues 3D) et le
+  curseur « Sombre » à 45 %, la valeur par défaut de SketchUp.
+- Sans IFC chargé, un objet rangé dans une collection Bonsai « IfcBuildingStorey/1er étage » prend ce niveau pour
+  étiquette, ses pièces comprises (« Pièces - 1er étage »).
+- Bibliothèque openskp 1.4.0 (scènes, textes dans un groupe) au lieu de la 1.3.0.
+
+### Vérifications
+
+- La cause des taches, vérifiée dans SketchUp 2027 sur le fichier de la 0.2.3 : avec la couleur des faces arrière
+  passée en magenta, chaque vitrage de la vue d'ouverture devient magenta. Avec la 0.3.0, l'image de la vue
+  d'ouverture reste identique au pixel près après ce changement : aucun verso visible.
+- Villa de trois niveaux et appartement exportés depuis leur IFC, rouverts dans SketchUp 2027, chaque scène activée
+  par script : 7 et 3 scènes, étiquettes masquées comme prévu, aucune face visible au verso sans matière, noms des
+  pièces visibles dans les seules scènes « Plan » (11, 10 et 6 pour les trois niveaux de la villa, 5 pour
+  l'appartement). Après un clic sur une scène, les façades restent claires (gris foncé avant le réglage de l'éclairage).
+- Trois écarts trouvés pendant ces essais, corrigés avant la sortie. SketchUp lit la position d'étiquette qu'écrit
+  openskp comme le vecteur de la ligne de rappel : les noms partaient loin de leur pièce, ils sont maintenant posés
+  sur leur point. Une scène sans les réglages d'ombre rend le fichier illisible (« Format de fichier inattendu ») :
+  d'où le réglage de l'heure et du curseur « Sombre ». Un nom posé près du sol passait sous les murs voisins : il est
+  posé au-dessus de ce que porte le niveau.
+- Avec l'extension installée, par `ifc_vers_skp.py` : bâti identique (villa +0,002 %, appartement 0,000 %, mêmes
+  dimensions), pièces à −0,62 % et −0,64 % (retrait de 5 mm), et les scènes relues comme caméras dans Blender.
+- Série d'essais, 13 cas dont le nouveau `niveaux` (deux niveaux sans IFC chargé, relus par openskp : scènes,
+  étiquettes masquées, textes, verso des faces) : surface et boîte englobante identiques à l'original après
+  l'aller-retour, volume à 1e-5 près, chaîne complète fidèle.
+
 ## 0.2.3, 28 octobre 2026 : pièces sans moirage, surface dans leur nom
 
 Les faces des pièces tombaient exactement sur les sols, les plafonds et les murs. SketchUp ne sait pas laquelle

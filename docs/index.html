@@ -216,7 +216,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
         <li><a href="#limites">Limites</a></li>
       </ul>
     </nav>
-    <a class="bouton cta petit" href="extensions/arkedia_skp_bridge-0.2.3.zip" download>Télécharger</a>
+    <a class="bouton cta petit" href="extensions/arkedia_skp_bridge-0.3.0.zip" download>Télécharger</a>
   </div>
 </header>
 
@@ -229,11 +229,11 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
         <h1>Livrez du SketchUp depuis Blender.</h1>
         <p class="chapo">Arkedia SKP Bridge lit et écrit les fichiers .skp directement dans Blender 5.2 LTS. Aucun SketchUp à installer, aucun détour par l'OBJ ou l'IFC. Un composant placé 100&nbsp;000 fois reste un seul maillage, un mur percé de fenêtres ou un sol carrelé s'ouvrent sans diagonales, et la classe IFC suit dans les attributs. Les fichiers exportés s'ouvrent dans SketchUp 2027 comme dans SketchUp pour le web.</p>
         <div class="actions">
-          <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.3.zip" download>Télécharger la version 0.2.3</a>
+          <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.3.0.zip" download>Télécharger la version 0.3.0</a>
           <a class="bouton fantome" href="#installation">Installer par le dépôt</a>
           <a class="bouton fantome" data-repo href="https://github.com/">Voir le code</a>
         </div>
-        <small>Windows 64 bits. Testée sur Blender 5.2.3 LTS, déclarée compatible 5.1. Licence GPL-3.0 ou ultérieure. Zip de 2,2&nbsp;Mo, bibliothèques comprises.</small>
+        <small>Windows 64 bits. Testée sur Blender 5.2.3 LTS, déclarée compatible 5.1. Licence GPL-3.0 ou ultérieure. Zip de 2,3&nbsp;Mo, bibliothèques comprises.</small>
       </div>
       <div class="vignettes">
         <figure class="vignette">
@@ -284,7 +284,8 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
           <li>Depuis Bonsai&nbsp;: classe IFC, GlobalId, nom, niveau et jeux de propriétés dans les attributs SketchUp.</li>
           <li>Pièces (IfcSpace) en option&nbsp;: translucides, nommées avec leur surface («&nbsp;Pièce 01 Chambre, 28,38&nbsp;m²&nbsp;»), rentrées de 5&nbsp;mm pour ne pas scintiller avec les sols et les murs, sur une étiquette par niveau masquée à l'ouverture.</li>
           <li>Matériaux, transparence et textures, modificateurs appliqués, unités de la scène respectées (2,80&nbsp;m au lieu de 9' 2 1/4").</li>
-          <li>Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle.</li>
+          <li>Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle. Depuis un IFC rangé par niveaux, des scènes toutes prêtes&nbsp;: une vue 3D en maison de poupée et une vue de dessus par niveau, avec le nom et la surface de chaque pièce.</li>
+          <li>Vitrages et pièces translucides sans taches bleues&nbsp;: le verso de chaque face porte la matière du recto.</li>
         </ul>
       </article>
     </div>
@@ -330,7 +331,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
           <li>Dans Préférences, Obtenir des extensions&nbsp;: menu déroulant en haut à droite, «&nbsp;Install from Disk&nbsp;» (libellé non traduit).</li>
           <li>Ou glisser le zip sur la fenêtre de Blender.</li>
         </ol>
-        <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.2.3.zip" download>arkedia_skp_bridge-0.2.3.zip</a>
+        <a class="bouton cta" href="extensions/arkedia_skp_bridge-0.3.0.zip" download>arkedia_skp_bridge-0.3.0.zip</a>
       </article>
     </div>
     <p class="note" style="margin-top:22px">Ensuite, Fichier, Importer et Fichier, Exporter proposent «&nbsp;SketchUp Arkedia (.skp)&nbsp;». Un fichier d'exemple, la maison ci-dessus, est dans le dépôt&nbsp;: <code>exemples/maison_test.skp</code>.</p>
@@ -430,6 +431,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
       <li><b>Windows 64 bits seulement.</b> Les bibliothèques compilées jointes sont celles de Windows et de Python 3.13, la version de Blender 5.1 et 5.2. Essais menés sur la 5.2.3 LTS.</li>
       <li><b>Surfaces texturées.</b> Elles sont fusionnées quand leur texture se déroule d'un seul tenant. Avec des îlots de dépliage séparés, des miroirs ou des coutures, elles gardent leur triangulation et leurs diagonales dans SketchUp.</li>
       <li><b>Collections instanciées.</b> Une collection instanciée s'exporte comme un seul composant, pas comme une hiérarchie de sous-composants.</li>
+      <li><b>Scènes.</b> Une scène ne garde pas de plan de coupe&nbsp;: les vues «&nbsp;Plan&nbsp;» regardent le niveau d'en haut, niveaux supérieurs, plafonds et toiture masqués. Les noms des pièces sont des textes à taille d'écran, qui peuvent se chevaucher dans de petites pièces voisines.</li>
       <li><b>Pièces IFC.</b> Elles sont rentrées de 5&nbsp;mm pour ne pas scintiller avec les sols et les murs&nbsp;: une face mesurée à la main dans SketchUp donne un peu moins que la surface du métré, écrite dans le nom de la pièce. Une pièce qui n'est pas un volume fermé part sans retrait et peut scintiller.</li>
       <li><b>Objets non exportés.</b> Nuages de points, volumes, crayons gras et cheveux. Courbes, textes et surfaces sont exportés en maillage évalué.</li>
       <li><b>Très gros fichiers.</b> Un import coûte environ 30 fois la taille du fichier en mémoire, et supprimer ensuite des centaines de milliers d'objets est lent&nbsp;: c'est le comportement de Blender.</li>
@@ -460,7 +462,7 @@ footer { padding: 56px 0 48px; border-top: 1px solid var(--filet); background: v
       <div>
         <h3>Projet</h3>
         <p><a data-repo href="https://github.com/">Code source et suivi des défauts</a></p>
-        <p><a href="extensions/arkedia_skp_bridge-0.2.3.zip" download>Télécharger la version 0.2.3</a></p>
+        <p><a href="extensions/arkedia_skp_bridge-0.3.0.zip" download>Télécharger la version 0.3.0</a></p>
         <p>Licence GPL-3.0 ou ultérieure</p>
       </div>
     </div>

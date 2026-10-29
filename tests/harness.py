@@ -602,12 +602,68 @@ def build_pieces(param):
             "export_kw": {"export_spaces": True, "hide_spaces": True}}
 
 
+def build_niveaux(param):
+    """Deux niveaux façon Bonsai (collections « IfcBuildingStorey/… », sans IFC chargé) : dalle, quatre murs, une
+    vitre translucide et une pièce masquée par niveau. Export par niveau avec les pièces : verso de chaque face
+    peint de sa matière, une étiquette par niveau et par niveau de pièces, cinq scènes qui masquent les bonnes
+    étiquettes, le nom et la surface de chaque pièce en texte."""
+    from shapely.geometry import Polygon
+    ms = mats(2)
+    verre = bpy.data.materials.new("Vitrage")
+    verre.diffuse_color = (0.8, 0.9, 0.95, 0.45)
+    piece = bpy.data.materials.new("Pièce")
+    piece.diffuse_color = (0.55, 0.8, 0.92, 0.15)
+    racine = bpy.context.scene.collection
+    h = 2.8
+    textes = []
+    for nom, code, z in (("Rez-de-chaussée", "R01", 0.0), ("1er étage", "E01", 3.2)):
+        c = bpy.data.collections.new("IfcBuildingStorey/" + nom)
+        racine.children.link(c)
+        Vd, Fd = box_arrays(10.4, 6.4, 0.2, ox=-0.2, oy=-0.2, oz=z - 0.2)
+        ob = bpy.data.objects.new("Dalle " + code, mesh_from("Dalle " + code, Vd, Fd))
+        ob.data.materials.append(ms[0])
+        link(ob, c)
+        for i, (sx, sy, ox, oy) in enumerate(((10.4, 0.2, -0.2, -0.2), (10.4, 0.2, -0.2, 6.0),
+                                              (0.2, 6.0, -0.2, 0.0), (0.2, 6.0, 10.0, 0.0))):
+            Vw, Fw = box_arrays(sx, sy, h, ox=ox, oy=oy, oz=z)
+            ob = bpy.data.objects.new("Mur %s %d" % (code, i), mesh_from("Mur %s %d" % (code, i), Vw, Fw))
+            ob.data.materials.append(ms[1])
+            link(ob, c)
+        Vg, Fg = box_arrays(2.0, 0.02, 1.5, ox=4.0, oy=-0.3, oz=z + 0.9)
+        ob = bpy.data.objects.new("Vitre " + code, mesh_from("Vitre " + code, Vg, Fg))
+        ob.data.materials.append(verre)
+        link(ob, c)
+        V, F = _prism_from_polygon(Polygon([(0, 0), (10, 0), (10, 6), (0, 6)]), z, z + h)
+        ob = bpy.data.objects.new("IfcSpace/" + code, mesh_from("IfcSpace/" + code, V, F))
+        ob.data.materials.append(piece)
+        link(ob, c)
+        ob.hide_set(True)
+        ob.hide_viewport = True
+        textes.append(code + "\n" + A._fr_area(60.0))
+    p_r, p_e = "Pièces - Rez-de-chaussée", "Pièces - 1er étage"
+    attendu = {
+        "scenes": ["Vue d'ensemble", "3D - Rez-de-chaussée", "3D - 1er étage", "Plan - Rez-de-chaussée",
+                   "Plan - 1er étage"],
+        "masquees": {
+            "Vue d'ensemble": [p_e, p_r],
+            "3D - Rez-de-chaussée": ["1er étage", p_e, p_r],
+            "3D - 1er étage": [p_e, p_r],
+            "Plan - Rez-de-chaussée": ["1er étage", p_e],
+            "Plan - 1er étage": [p_r, "Rez-de-chaussée"],
+        },
+        "etiquettes": sorted(["Rez-de-chaussée", "1er étage", p_r, p_e]),
+        "textes": sorted(textes),
+    }
+    return {"niveaux_attendus": attendu,
+            "export_kw": {"layer_mode": "IFC_STOREY", "export_spaces": True, "hide_spaces": True}}
+
+
 BUILD = {
     "boxes": build_boxes, "inst": build_inst, "sphere": build_sphere, "gridflat": build_gridflat,
     "gridholes": build_gridholes, "terrain": build_terrain, "degenerate": build_degenerate,
     "transforms": build_transforms, "mm": build_mm, "modifiers": build_modifiers,
     "texture": build_texture, "unicode": build_unicode, "mod": build_mod, "collinst": build_collinst,
-    "pieces": build_pieces,
+    "pieces": build_pieces, "niveaux": build_niveaux,
 }
 
 
@@ -697,6 +753,31 @@ def check_pieces(attendues, inset_mm):
     return out
 
 
+def check_niveaux(path, attendu):
+    """Relit le .skp avec openskp : scènes et étiquettes qu'elles masquent, étiquettes, textes, verso des faces."""
+    import openskp
+    m = openskp.SkpFile.open(path).parse()
+    defs = list(m.definitions.values()) + [m.root]
+    nom = {i: mt.name for i, mt in m.materials_by_id.items()}
+    faces = [f for d in defs for f in d.faces.values()]
+    peintes = [f for f in faces if f.material_id is not None]
+    out = {
+        "scenes": [pg.name for pg in m.pages],
+        "masquees": {pg.name: sorted(pg.hidden_layers) for pg in m.pages},
+        "etiquettes": sorted(l.name for l in m.layers if l.name not in ("Layer0", "Untagged", "Sans étiquette")),
+        "textes": sorted(t.text for d in defs for t in d.texts),
+        "faces_matiere": len(peintes),
+        "verso_peint": sum(1 for f in peintes if nom.get(f.back_material_id) == nom.get(f.material_id)),
+    }
+    out["ok"] = bool(
+        out["scenes"] == attendu["scenes"]
+        and all(out["masquees"].get(k) == sorted(v) for k, v in attendu["masquees"].items())
+        and out["etiquettes"] == attendu["etiquettes"]
+        and out["textes"] == attendu["textes"]
+        and out["faces_matiere"] > 0 and out["verso_peint"] == out["faces_matiere"])
+    return out
+
+
 def main():
     res = {"case": CASE, "param": PARAM, "status": "OK", "blender": bpy.app.version_string}
     path = os.path.join(OUTDIR, TAG + ".skp")
@@ -715,6 +796,10 @@ def main():
                                              **(res["build"] or {}).get("export_kw", {}))
             res["size_mb"] = round(os.path.getsize(path) / 2 ** 20, 3)
             log("export : %s" % json.dumps(res["export"], default=str))
+            if (res["build"] or {}).get("niveaux_attendus"):
+                with Phase("controle_niveaux"):
+                    res["niveaux"] = check_niveaux(path, res["build"]["niveaux_attendus"])
+                log("niveaux : %s" % json.dumps(res["niveaux"], ensure_ascii=False))
             res["phases"] = dict(TIMES)
             res["peak_gb"] = round(PEAK[0], 2)
             res["seconds"] = round(time.time() - T0, 1)
@@ -723,7 +808,7 @@ def main():
             write_result(dict(res, etape="export"))
         else:
             res = json.load(open(partial, encoding="utf-8"))
-            res["status"] = "OK"
+            res["status"] = "OK" if (res.get("niveaux") or {}).get("ok", True) else "ECART_NIVEAUX"
             bpy.ops.wm.read_factory_settings(use_empty=True)
             if res.get("unit_scale") and abs(res["unit_scale"] - 1.0) > 1e-12:
                 bpy.context.scene.unit_settings.system = "METRIC"

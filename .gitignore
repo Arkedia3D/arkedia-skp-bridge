@@ -4,6 +4,7 @@ __pycache__/
 
 # Essais : environnement jetable, roues dépaquetées, résultats
 tests/.site/
+tests/.site-*/
 tests/.sandbox/
 tests/resultats/
 *.skp

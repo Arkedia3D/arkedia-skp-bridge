@@ -25,9 +25,9 @@ python tests\driver.py resultats 4 degenerate transforms mm modifiers unicode co
 python tests\summarize.py resultats
 ```
 
-Au premier lancement, les quatre roues de `arkedia_skp_bridge/wheels/` sont dépaquetées dans `tests/.site`. Pour
-tester une autre copie de l'add-on, pointer `ARK_DEV` vers le dossier qui contient son sous-dossier
-`arkedia_skp_bridge/`.
+Au premier lancement, les roues de `arkedia_skp_bridge/wheels/` sont dépaquetées dans `tests/.site-<empreinte>`,
+un dossier par jeu de roues : une nouvelle version d'openskp donne un nouveau dossier. Pour tester une autre copie
+de l'add-on, pointer `ARK_DEV` vers le dossier qui contient son sous-dossier `arkedia_skp_bridge/`.
 
 ## Le banc de charge (`driver.py`, `harness.py`)
 
@@ -55,6 +55,7 @@ processus qui le dépasse et le consigne dans le résultat.
 | `unicode` | noms accentués, japonais, emoji, noms de 300 caractères, noms en double ou à caractères spéciaux, propriétés personnalisées très longues, un objet masqué |
 | `collinst` | collections instanciées : décalage d'instance, imbrication, miroir, échelle négative |
 | `pieces` | pièces façon Bonsai (volumes « IfcSpace/… » masqués, collés au sol, au plafond et aux murs) : trois rectangulaires, une en L, une qui contourne une trémie collée au mur. Export avec l'option pièces ; à la relecture, chacune doit être rentrée de 5 mm, nommée avec sa surface et rangée sur une étiquette masquée |
+| `niveaux` | deux niveaux façon Bonsai (collections « IfcBuildingStorey/… », sans IFC chargé), chacun avec dalle, murs, vitre translucide et pièce masquée. Export par niveau avec les pièces ; relu par openskp, le fichier doit avoir cinq scènes qui masquent les bonnes étiquettes, quatre étiquettes, le nom et la surface de chaque pièce en texte, et le verso de chaque face peint de la matière du recto |
 
 Les mesures de mémoire sont celles de la mémoire engagée par le processus Blender, relevée toutes les 50 ms.
 

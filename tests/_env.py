@@ -9,15 +9,18 @@ Les scripts commencent par :
 
 setup() ajoute à sys.path :
 
-* les bibliothèques compilées (openskp, shapely, mapbox_earcut, defusedxml). Les quatre roues de
-  arkedia_skp_bridge/wheels/ sont dépaquetées une fois dans tests/.site. La variable ARK_SITE désigne un autre
-  dossier si on préfère en utiliser un existant (par exemple le site-packages des extensions de Blender) ;
+* les bibliothèques compilées (openskp, shapely, mapbox_earcut, defusedxml). Les roues de
+  arkedia_skp_bridge/wheels/ sont dépaquetées une fois dans tests/.site-<empreinte>, un dossier par jeu de roues :
+  changer une roue (nouvelle version d'openskp) donne un nouveau dossier, jamais un mélange avec l'ancienne. La
+  variable ARK_SITE désigne un autre dossier si on préfère en utiliser un existant (par exemple le site-packages
+  des extensions de Blender) ;
 * la racine du dépôt, qui contient le dossier arkedia_skp_bridge/. La variable ARK_DEV désigne un autre dossier
   (une copie de travail, une version à comparer) contenant lui aussi un dossier arkedia_skp_bridge/.
 
 Les roues fournies sont celles de Windows 64 bits pour Python 3.13, la version embarquée dans Blender 5.1 et 5.2.
 """
 import glob
+import hashlib
 import os
 import shutil
 import sys
@@ -31,8 +34,9 @@ def site_dir():
     site = os.environ.get("ARK_SITE")
     if site:
         return site
-    site = os.path.join(HERE, ".site")
     wheels = os.path.join(REPO, "arkedia_skp_bridge", "wheels")
+    names = sorted(n for n in os.listdir(wheels) if n.endswith(".whl")) if os.path.isdir(wheels) else []
+    site = os.path.join(HERE, ".site-" + hashlib.sha1("|".join(names).encode("utf-8")).hexdigest()[:10])
     stamp = os.path.join(site, ".extrait")
     if not os.path.exists(stamp) and os.path.isdir(wheels):
         os.makedirs(site, exist_ok=True)

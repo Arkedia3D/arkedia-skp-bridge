@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "arkedia_skp_bridge"
-version = "0.2.3"
+version = "0.3.0"
 name = "Arkedia SKP Bridge"
 tagline = "Import/export SketchUp (.skp) pour le flux scan vers CAO/BIM"
 maintainer = "ARKEDIA 3D <contact@arkedia3d.ci>"
@@ -21,7 +21,7 @@ license = [
 platforms = ["windows-x64"]
 
 wheels = [
-  "./wheels/openskp-1.3.0-py3-none-any.whl",
+  "./wheels/openskp-1.4.0-py3-none-any.whl",
   "./wheels/mapbox_earcut-2.1.0-cp313-cp313-win_amd64.whl",
   "./wheels/shapely-2.1.2-cp313-cp313-win_amd64.whl",
   "./wheels/defusedxml-0.7.1-py2.py3-none-any.whl",

@@ -982,6 +982,9 @@ _SPACE_DEFAULT_RGB = (140, 205, 235)
 # villa de 20 m ; 5 mm gardent de la marge pour un bâtiment plus grand ou une vue plus lointaine, très en deçà des
 # 2 cm du relevé.
 _SPACE_INSET_MM = 5.0
+# Nom de la pièce en texte SketchUp, dans le groupe de la pièce (visible avec son étiquette « Pièces - <niveau> ») :
+# au point le plus éloigné des bords, sans ligne de rappel, 10 cm au-dessus de ce que porte le niveau.
+_ROOM_LABEL_LIFT_M = 0.10
 
 
 def _fr_area(area_m2):
@@ -1299,13 +1302,25 @@ def _inset_space(mesh, matrix_world, d):
     return "emprise", tmp
 
 
-def _space_layer(mode, info):
+def _space_layer(mode, info, storey=None):
     if mode == "NONE":
         return None
     if mode == "IFC_CLASS":
         return info.get("ifc_class") or "IfcSpace"
-    storey = info.get("ifc_storey")
+    storey = info.get("ifc_storey") or storey
     return f"Pièces - {storey}" if storey else "Pièces"
+
+
+def _collection_storey(obj, index):
+    """Niveau d'après la collection Bonsai « IfcBuildingStorey/<niveau> » qui contient l'objet, sinon None."""
+    for coll in index.get(obj.name_full, ()):
+        nm = coll.name
+        if nm in ("Collection", "Scene Collection") or nm.endswith("(source geometry)"):
+            continue
+        if nm.startswith("IfcBuildingStorey"):
+            # nom du niveau, sans le préfixe de la collection Bonsai (« IfcBuildingStorey/RDC » -> « RDC »)
+            return nm.split("/", 1)[1] if "/" in nm and nm.split("/", 1)[1].strip() else nm
+    return None
 
 
 def _collection_index():
@@ -1322,7 +1337,25 @@ def _collection_index():
     return index
 
 
-def _object_layer(obj, mode, info, index):
+_CEILING_PREFIX = "Plafonds - "
+_ROOF_PREFIX = "Toiture - "
+
+
+def _overhead_kind(info):
+    """« plafond » pour un IfcCovering CEILING, « toiture » pour un IfcRoof ou une dalle ROOF, sinon None."""
+    cls = info.get("ifc_class") or ""
+    ptype = (info.get("ifc_predefined_type") or "").upper()
+    if cls == "IfcCovering" and ptype == "CEILING":
+        return "plafond"
+    if cls == "IfcRoof" or (cls == "IfcSlab" and ptype == "ROOF"):
+        return "toiture"
+    return None
+
+
+def _object_layer(obj, mode, info, index, split_overhead=False):
+    """Étiquette d'un objet. Avec `split_overhead` (niveaux IFC), plafonds et toitures d'un niveau ont leur propre
+    étiquette (« Plafonds - <niveau> », « Toiture - <niveau> ») : les scènes par niveau les masquent pour montrer
+    les pièces vues d'en haut."""
     if mode == "NONE":
         return None
     if mode == "IFC_CLASS":
@@ -1331,18 +1364,22 @@ def _object_layer(obj, mode, info, index):
             head = obj.name.split("/", 1)[0]
             cls = head if head.startswith("Ifc") else None
         return cls
-    if mode == "IFC_STOREY" and info.get("ifc_storey"):
-        # niveau lu dans l'IFC (conteneur, puis agrégat) : rattache aussi les éléments d'un agrégat (volées d'escalier)
-        return info["ifc_storey"]
+    if mode == "IFC_STOREY":
+        # niveau lu dans l'IFC (conteneur, puis agrégat) : rattache aussi les éléments d'un agrégat (volées
+        # d'escalier) ; sinon la collection Bonsai du niveau
+        storey = info.get("ifc_storey") or _collection_storey(obj, index)
+        if not storey:
+            return None
+        kind = _overhead_kind(info) if split_overhead else None
+        if kind == "plafond":
+            return _CEILING_PREFIX + storey
+        if kind == "toiture":
+            return _ROOF_PREFIX + storey
+        return storey
     for coll in index.get(obj.name_full, ()):
         nm = coll.name
         if nm in ("Collection", "Scene Collection") or nm.endswith("(source geometry)"):
             continue
-        if mode == "IFC_STOREY":
-            if not nm.startswith("IfcBuildingStorey"):
-                continue
-            # étiquette au nom du niveau, sans le préfixe de la collection Bonsai (« IfcBuildingStorey/RDC » -> « RDC »)
-            return nm.split("/", 1)[1] if "/" in nm and nm.split("/", 1)[1].strip() else nm
         return nm
     return None
 
@@ -1974,8 +2011,12 @@ def _soften_mask(A, angle_deg):
     return (shared >= A["ltotal"]) & (worst <= angle_deg)
 
 
-def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, soften=None):
+def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, soften=None, paint_back=True):
     """Écrit les polygones d'un maillage Blender (unités de la scène) dans un groupe ou un composant.
+
+    `paint_back` : le verso de chaque face reçoit la matière du recto (sauf matière texturée). Sans cela, SketchUp
+    peint le verso de la couleur « face arrière » du style, un bleu-violet que l'on voit au travers des vitrages et
+    des pièces translucides.
 
     `soften` = {"angle": degrés, "min_faces": n} : les polygones d'un maillage d'au moins n faces dont tous les
     voisins sont à moins de `angle` degrés reçoivent des arêtes douces et lisses (comme l'outil Adoucir de SketchUp).
@@ -2034,6 +2075,12 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
     def handle_for(index):
         return handles[index] if 0 <= index < len(handles) else None
 
+    def with_back(kw):
+        h = kw.get("material")
+        if paint_back and h is not None and h not in textured:
+            kw["back_material"] = h
+        return kw
+
     absorbed = np.zeros(n_poly, dtype=bool)
     dup_mask, flipped_keep = _duplicate_polygons(A, k)
     if dup_mask is not None:
@@ -2070,7 +2117,7 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
                         kw["holes"] = holes
                     if grp.get("uv_pins"):
                         kw["front_uv"] = grp["uv_pins"]
-                    target.add_face(outer, **kw)
+                    target.add_face(outer, **with_back(kw))
                     written += 1
             except Exception:
                 stats["groups_split"] = stats.get("groups_split", 0) + 1
@@ -2107,6 +2154,8 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
             kwargs["smooth_edges"] = True
         if p in flipped_keep and kwargs["material"] is not None:
             kwargs["back_material"] = kwargs["material"]
+        else:
+            with_back(kwargs)
         if uv_arr is not None and kwargs["material"] is not None and kwargs["material"] in textured:
             uv = front_uv(p)
             if uv:
@@ -2140,7 +2189,7 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
             if uv_arr is not None and handle is not None and handle in textured:
                 kwargs["front_uv"] = uv_of(tl[i].tolist())
             try:
-                target.add_face([pts[j] for j in tv[i].tolist()], **kwargs)
+                target.add_face([pts[j] for j in tv[i].tolist()], **with_back(kwargs))
                 stats["faces"] += 1
                 stats["faces_triangulated"] += 1
             except Exception as exc:
@@ -2185,11 +2234,43 @@ _CAM_MARGIN = 1.08
 _CAM_MIN_RADIUS_IN = 12.0
 
 
+def _camera_for_box(lo, hi, mode="PERSPECTIVE"):
+    """Caméra « Iso » (œil au sud-est, en hauteur) qui cadre la boîte (lo, hi) en pouces.
+
+    L'œil recule juste assez pour que les huit coins de la boîte tiennent dans l'angle de vue de 30 degrés
+    (la plus petite dimension de la fenêtre), avec 8 % de marge. Renvoie (œil, cible, haut, hauteur) ou None.
+    """
+    if any(not math.isfinite(v) for v in tuple(lo) + tuple(hi)):
+        return None
+    center = [(a + b) / 2.0 for a, b in zip(lo, hi)]
+    radius = max(math.sqrt(sum(((b - a) / 2.0) ** 2 for a, b in zip(lo, hi))), _CAM_MIN_RADIUS_IN)
+    half = math.radians(_CAM_FOV_DEG / 2.0)
+    norm = math.sqrt(sum(c * c for c in _CAM_DIRECTION))
+    view = [c / norm for c in _CAM_DIRECTION]  # de la cible vers l'œil
+    up = (-view[2] * view[0], -view[2] * view[1], 1.0 - view[2] * view[2])  # +Z projeté sur le plan de vue
+    un = math.sqrt(sum(c * c for c in up))
+    up = [c / un for c in up]
+    fwd = [-c for c in view]
+    right = (fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0])
+    reach, dist = 0.0, 1.1 * radius
+    for cx in (lo[0], hi[0]):
+        for cy in (lo[1], hi[1]):
+            for cz in (lo[2], hi[2]):
+                o = (cx - center[0], cy - center[1], cz - center[2])
+                lateral = max(abs(sum(o[i] * right[i] for i in range(3))), abs(sum(o[i] * up[i] for i in range(3))))
+                reach = max(reach, lateral)
+                dist = max(dist, sum(o[i] * view[i] for i in range(3)) + _CAM_MARGIN * lateral / math.tan(half))
+    if mode != "PERSPECTIVE":
+        dist = max(dist, _CAM_MARGIN * radius / math.sin(half))  # œil hors du modèle : pas de coupe en vue parallèle
+    eye = [center[i] + view[i] * dist for i in range(3)]
+    height = 2.0 * dist * math.tan(half) if mode == "PERSPECTIVE" else 2.0 * _CAM_MARGIN * max(reach, _CAM_MIN_RADIUS_IN / 2.0)
+    return eye, center, up, height
+
+
 def _frame_camera(buf, lo, hi, mode="PERSPECTIVE"):
     """Recadre sur place (`buf` : bytearray du .skp) la caméra enregistrée sur la boîte (lo, hi) en pouces.
 
-    L'œil recule juste assez pour que les huit coins de la boîte tiennent dans l'angle de vue de 30 degrés
-    (la plus petite dimension de la fenêtre), avec 8 % de marge. Renvoie True si la caméra a été écrite.
+    Voir `_camera_for_box`. Renvoie True si la caméra a été écrite.
     """
     import struct
 
@@ -2199,39 +2280,207 @@ def _frame_camera(buf, lo, hi, mode="PERSPECTIVE"):
         got = tuple(struct.unpack_from("<3d", buf, off) for off in (_CAM_EYE, _CAM_TARGET, _CAM_UP))
         if any(abs(a - b) > 1e-6 for g, e in zip(got, _CAM_EXPECTED) for a, b in zip(g, e)):
             return False
-        if any(not math.isfinite(v) for v in tuple(lo) + tuple(hi)):
+        cam = _camera_for_box(lo, hi, mode)
+        if cam is None:
             return False
-        center = [(a + b) / 2.0 for a, b in zip(lo, hi)]
-        radius = max(math.sqrt(sum(((b - a) / 2.0) ** 2 for a, b in zip(lo, hi))), _CAM_MIN_RADIUS_IN)
-        half = math.radians(_CAM_FOV_DEG / 2.0)
-        norm = math.sqrt(sum(c * c for c in _CAM_DIRECTION))
-        view = [c / norm for c in _CAM_DIRECTION]  # de la cible vers l'œil
-        up = (-view[2] * view[0], -view[2] * view[1], 1.0 - view[2] * view[2])  # +Z projeté sur le plan de vue
-        un = math.sqrt(sum(c * c for c in up))
-        up = [c / un for c in up]
-        fwd = [-c for c in view]
-        right = (fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0])
-        reach, dist = 0.0, 1.1 * radius
-        for cx in (lo[0], hi[0]):
-            for cy in (lo[1], hi[1]):
-                for cz in (lo[2], hi[2]):
-                    o = (cx - center[0], cy - center[1], cz - center[2])
-                    lateral = max(abs(sum(o[i] * right[i] for i in range(3))), abs(sum(o[i] * up[i] for i in range(3))))
-                    reach = max(reach, lateral)
-                    dist = max(dist, sum(o[i] * view[i] for i in range(3)) + _CAM_MARGIN * lateral / math.tan(half))
-        if mode != "PERSPECTIVE":
-            dist = max(dist, _CAM_MARGIN * radius / math.sin(half))  # œil hors du modèle : pas de coupe en vue parallèle
-        eye = [center[i] + view[i] * dist for i in range(3)]
+        eye, center, up, height = cam
         struct.pack_into("<3d", buf, _CAM_EYE, *eye)
         struct.pack_into("<3d", buf, _CAM_TARGET, *center)
         struct.pack_into("<3d", buf, _CAM_UP, *up)
         buf[_CAM_PERSPECTIVE] = 1 if mode == "PERSPECTIVE" else 0
         struct.pack_into("<d", buf, _CAM_FOV, _CAM_FOV_DEG)
-        height = 2.0 * dist * math.tan(half) if mode == "PERSPECTIVE" else 2.0 * _CAM_MARGIN * max(reach, _CAM_MIN_RADIUS_IN / 2.0)
         struct.pack_into("<d", buf, _CAM_HEIGHT, height)
         return True
     except Exception:
         return False
+
+
+# --- scènes par niveau ---------------------------------------------------------------------------------
+#
+# Une scène SketchUp garde une caméra et les étiquettes qu'elle masque (openskp 1.4). Pour un IFC rangé par niveaux :
+# « Vue d'ensemble » (la vue d'ouverture, pièces masquées), puis pour chaque niveau « 3D - <niveau> » (maison de
+# poupée : niveaux supérieurs, plafonds et toiture du niveau masqués) et « Plan - <niveau> » (vue de dessus en
+# projection parallèle, le niveau seul avec ses pièces et leurs noms). Une scène ne garde pas de plan de coupe.
+_SCENE_OVERVIEW = "Vue d'ensemble"
+_PLAN_ASPECT = 1.6   # largeur / hauteur supposée de la fenêtre de SketchUp
+_PLAN_MARGIN = 1.10
+
+
+def _plan_camera(lo, hi, top_z):
+    """Vue de dessus parallèle (nord en haut) qui cadre l'emprise (lo, hi) en pouces ; œil au-dessus de `top_z`."""
+    if any(not math.isfinite(v) for v in tuple(lo) + tuple(hi) + (top_z,)):
+        return None
+    cx, cy = (lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0
+    dx, dy = max(hi[0] - lo[0], 0.0), max(hi[1] - lo[1], 0.0)
+    height = max(dy, dx / _PLAN_ASPECT, _CAM_MIN_RADIUS_IN) * _PLAN_MARGIN
+    eye = (cx, cy, max(top_z, hi[2]) + max(dx, dy, 100.0))
+    target = (cx, cy, lo[2])
+    return eye, target, (0.0, 1.0, 0.0), height
+
+
+def _storey_order(names, bounds_of, tool):
+    """Niveaux du plus bas au plus haut : altitude IfcBuildingStorey.Elevation, sinon bas de la boîte englobante."""
+    elev = {}
+    try:
+        f = tool.Ifc.get() if tool is not None else None
+        for st in (f.by_type("IfcBuildingStorey") if f is not None else ()):
+            nm = str(st.Name or getattr(st, "LongName", None) or "Niveau")
+            if getattr(st, "Elevation", None) is not None:
+                elev.setdefault(nm, float(st.Elevation))
+    except Exception:
+        elev = {}
+
+    use_elev = bool(names) and all(nm in elev for nm in names)
+
+    def key(nm):
+        b = bounds_of.get(nm)
+        low = float(b[0][2]) if b is not None else 0.0
+        return (elev[nm], low) if use_elev else (low, 0.0)
+
+    return sorted(names, key=key)
+
+
+def _add_level_scenes(builder, stats, layer_handle, storey_objs, model_bounds, depsgraph, use_modifiers, k, tool):
+    """Ajoute les scènes « Vue d'ensemble », « 3D - <niveau> » et « Plan - <niveau> ». Renvoie les noms écrits."""
+    import numpy as np
+
+    bounds_of = {}
+    for nm, objs in storey_objs.items():
+        b = _scene_bounds(objs, [], {}, depsgraph, use_modifiers)
+        if b is not None:
+            bounds_of[nm] = (b[0] * k, b[1] * k)
+    order = [nm for nm in _storey_order(list(storey_objs), bounds_of, tool) if nm in bounds_of]
+    if not order or model_bounds is None:
+        return []
+    mlo, mhi = model_bounds[0] * k, model_bounds[1] * k
+
+    def handle(name):
+        return layer_handle.get(_clean_layer_name(name))
+
+    def tags(nm):
+        return [h for h in (handle(nm), handle(_CEILING_PREFIX + nm), handle(_ROOF_PREFIX + nm),
+                            handle(f"Pièces - {nm}")) if h is not None]
+
+    def overhead(nm):
+        return [h for h in (handle(_CEILING_PREFIX + nm), handle(_ROOF_PREFIX + nm)) if h is not None]
+
+    space_handles = [layer_handle[n] for n in stats.get("space_layers", []) if n in layer_handle]
+    written = []
+
+    def add(name, cam, perspective, hidden):
+        eye, target, up, height = cam
+        builder.add_scene(_su(name, 200), tuple(eye), tuple(target), tuple(up), perspective=perspective,
+                          fov=_CAM_FOV_DEG, ortho_height=max(float(height), 1.0), hidden_layers=sorted(set(hidden)))
+        written.append(name)
+
+    cam = _camera_for_box(mlo, mhi, "PERSPECTIVE")
+    if cam is not None:
+        add(_SCENE_OVERVIEW, cam, True, space_handles)
+    for i, nm in enumerate(order):
+        if handle(nm) is None:
+            continue  # niveau sans bâti à lui (toiture seule) : pas de scène
+        lo = np.minimum.reduce([bounds_of[s][0] for s in order[:i + 1]])
+        hi = np.maximum.reduce([bounds_of[s][1] for s in order[:i + 1]])
+        cam = _camera_for_box(lo, hi, "PERSPECTIVE")
+        if cam is not None:
+            hidden = list(space_handles) + overhead(nm) + [h for s in order[i + 1:] for h in tags(s)]
+            add(f"3D - {_clean_layer_name(nm)}", cam, True, hidden)
+    for nm in order:
+        if handle(nm) is None:
+            continue
+        lo, hi = bounds_of[nm]
+        cam = _plan_camera(lo, hi, float(mhi[2]))
+        if cam is not None:
+            own = handle(f"Pièces - {nm}")
+            hidden = [h for h in space_handles if h != own] + overhead(nm)
+            hidden += [h for s in order if s != nm for h in tags(s)]
+            add(f"Plan - {_clean_layer_name(nm)}", cam, False, hidden)
+    return written
+
+
+def _object_bottom_z(obj, depsgraph, use_modifiers):
+    """Altitude (unités Blender) du bas de la boîte englobante monde d'un objet, ou None."""
+    holder = obj
+    if obj.type != "MESH" or (use_modifiers and obj.modifiers):
+        try:
+            holder = obj.evaluated_get(depsgraph)
+        except Exception:
+            holder = obj
+    try:
+        M = obj.matrix_world
+        z = min((M @ mathutils.Vector(c)).z for c in holder.bound_box)
+        return z if math.isfinite(z) else None
+    except Exception:
+        return None
+
+
+def _su_lines(text, limit=200):
+    """Comme `_su`, mais garde les retours à la ligne (texte sur plusieurs lignes)."""
+    lines = [_su(part, limit) for part in str(text).split("\n")]
+    out = "\n".join(lines)
+    return out if len(out.encode("utf-16-le")) // 2 <= limit else _su(out.replace("\n", " "), limit)
+
+
+def _room_text(obj, info, area_m2):
+    """Texte posé dans une pièce : nom long IFC (sinon nom), puis la surface sur une deuxième ligne."""
+    name = info.get("ifc_long_name") or info.get("ifc_name")
+    if not name:
+        name = obj.name.split("/", 1)[1] if obj.name.startswith("IfcSpace/") else obj.name
+    return f"{name}\n{_fr_area(area_m2)}" if area_m2 else str(name)
+
+
+def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None):
+    """Point (repère de l'objet, unités Blender) où poser le nom d'une pièce : pôle d'inaccessibilité de l'emprise
+    de ses faces tournées vers le bas (le point le plus loin des bords, toujours dans la pièce, même en L), à
+    `lift_bu` au-dessus du haut de la pièce et au moins à `z_min_world` (hauteur des murs du niveau) : SketchUp cache
+    la partie d'un texte qui passe sous une face, et vu de dessus un nom plus large qu'une petite pièce déborde sur
+    les murs. None si le volume n'a pas de sol exploitable."""
+    import numpy as np
+
+    A = _mesh_arrays(mesh)
+    if not A["n_poly"]:
+        return None
+    M = np.array(matrix_world, dtype=np.float64)
+    co = A["co"] @ M[:3, :3].T + M[:3, 3]
+    lv, ls, lt = A["lv"], A["lstart"], A["ltotal"]
+    poly_of_loop = np.repeat(np.arange(A["n_poly"]), lt)
+    idx = np.arange(len(lv))
+    last = (ls + lt - 1)[poly_of_loop]
+    nxt = np.where(idx == last, ls[poly_of_loop], idx + 1)
+    N = np.zeros((A["n_poly"], 3))
+    np.add.at(N, poly_of_loop, np.cross(co[lv], co[lv[nxt]]))
+    lens = np.linalg.norm(N, axis=1)
+    down = np.nonzero((N[:, 2] < 0) & (np.abs(N[:, 2]) > 0.94 * np.maximum(lens, 1e-30)))[0]
+    if not len(down):
+        return None
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import polylabel, unary_union
+
+        parts = []
+        for p in down.tolist():
+            ring = co[lv[ls[p]:ls[p] + lt[p]], :2]
+            poly = Polygon(ring)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if not poly.is_empty and poly.area > 0:
+                parts.append(poly)
+        floor = unary_union(parts) if parts else None
+        if floor is None or floor.is_empty:
+            return None
+        if floor.geom_type != "Polygon":
+            floor = max(getattr(floor, "geoms", [floor]), key=lambda g: g.area)
+        pt = polylabel(floor, tolerance=max(1e-6, 0.01 * math.sqrt(floor.area)))
+        x, y = float(pt.x), float(pt.y)
+    except Exception:
+        pts = np.concatenate([co[lv[ls[p]:ls[p] + lt[p]], :2] for p in down.tolist()])
+        x, y = (float(v) for v in pts.mean(axis=0))
+    z = float(co[:, 2].max()) + lift_bu
+    if z_min_world is not None and math.isfinite(z_min_world):
+        z = max(z, float(z_min_world))
+    world = np.array([x, y, z, 1.0])
+    local = np.linalg.solve(M, world)
+    return tuple(float(v) for v in local[:3])
 
 
 # --- unités d'affichage ------------------------------------------------------------------------------
@@ -2313,6 +2562,38 @@ def _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers):
     return None
 
 
+# Éclairage des scènes. Une scène écrite par openskp retient les réglages d'ombre du gabarit (Boulder, 21 juin,
+# 13 h 30, sombre à 20 %) et SketchUp l'ouvre avec « Utiliser le soleil pour l'ombrage » : un clic sur un onglet
+# assombrissait toutes les faces tournées à l'opposé de ce soleil de sud-ouest, façades est et sud comprises (gris
+# foncé). Retirer les ombres de la scène (drapeau 4 de Page#update) n'est pas possible : SketchUp refuse alors le
+# fichier (« Format de fichier inattendu »). On règle donc l'heure à 10 h (soleil haut à l'est-sud-est, du côté de la
+# caméra des vues d'ensemble) et le curseur « Sombre » à 45 %, la valeur de SketchUp, dans chaque copie des réglages.
+_SUN_TIME_TEMPLATE = 1782048600   # 21 juin 2026, 13 h 30
+_SUN_TIME_SCENES = 1782036000     # 21 juin 2026, 10 h
+_SHADOW_SPAN_LEN = 103
+_SHADOW_HEAD = (_SUN_TIME_TEMPLATE).to_bytes(4, "little") + b"\x00\xff\xfe\xff\x0c" + "Boulder (CO)".encode("utf-16-le")
+_SHADOW_END = b"\x00\x01\x01\x00\x50\x00\x00\x00\x14\x00\x00\x00"   # ombres, sol, faces, arêtes ; clair 80, sombre 20
+_SHADOW_DARK = 45
+
+
+def _light_scenes(buf, expected):
+    """Règle sur place l'heure du soleil et le curseur « Sombre » de chaque copie des réglages d'ombre (le modèle et
+    ses scènes). Rien n'est touché si l'on ne trouve pas exactement `expected` copies attendues. Renvoie True si fait."""
+    heads, at = [], buf.find(_SHADOW_HEAD)
+    while at >= 0:
+        heads.append(at)
+        at = buf.find(_SHADOW_HEAD, at + 1)
+    if len(heads) != expected:
+        return False
+    ends = [h + _SHADOW_SPAN_LEN - len(_SHADOW_END) for h in heads]
+    if any(bytes(buf[e:e + len(_SHADOW_END)]) != _SHADOW_END for e in ends):
+        return False
+    for h, e in zip(heads, ends):
+        buf[h:h + 4] = _SUN_TIME_SCENES.to_bytes(4, "little")
+        buf[e + len(_SHADOW_END) - 4:e + len(_SHADOW_END)] = _SHADOW_DARK.to_bytes(4, "little")
+    return True
+
+
 def export_skp(filepath, context, *args, **options):
     """Exporte la scène en .skp (voir `_export_skp_impl` pour les options), tolérance de planéité assouplie."""
     with _relaxed_openskp() as patch:
@@ -2333,7 +2614,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                      layer_mode="COLLECTION", use_textures=True, store_attributes=True, export_psets=True,
                      merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
                      soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True,
-                     space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True):
+                     space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True, paint_back=True, level_scenes=True,
+                     room_labels=True):
     from openskp import create
 
     t0 = time.time()
@@ -2352,6 +2634,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
 
     need_ifc = store_attributes or export_spaces or layer_mode in ("IFC_STOREY", "IFC_CLASS")
     tool = _bonsai_tool() if need_ifc else None
+    # scènes par niveau : seulement avec une étiquette par niveau IFC (plafonds et toitures sur leurs propres étiquettes)
+    want_scenes = bool(level_scenes) and layer_mode == "IFC_STOREY"
 
     # pièces (IfcSpace) : Bonsai les masque ; elles partent quand même, avec leur étiquette et une matière translucide.
     # Avec « Sélection uniquement », seules celles des niveaux touchés par la sélection.
@@ -2464,15 +2748,19 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
         stats["space_inset_mm"] = round(inset_bu / uf * 1e3, 3) if spaces else 0.0
 
         # 2) infos IFC + calques (avant les définitions)
-        infos, psets, layer_of = {}, {}, {}
+        infos, psets, layer_of, storey_of = {}, {}, {}, {}
         coll_index = _collection_index() if (store_attributes or layer_mode != "NONE") else {}
         for obj in pool + inst_empties:
             info, dicts = _ifc_info(obj, tool, export_psets and store_attributes) if tool is not None else ({}, [])
             infos[obj.name], psets[obj.name] = info, dicts
+            if layer_mode == "IFC_STOREY":
+                st = info.get("ifc_storey") or _collection_storey(obj, coll_index)
+                if st:
+                    storey_of[obj.name] = st
             if obj.name in spaces:
-                layer_of[obj.name] = _space_layer(layer_mode, info)
+                layer_of[obj.name] = _space_layer(layer_mode, info, storey_of.get(obj.name))
             else:
-                layer_of[obj.name] = _object_layer(obj, layer_mode, info, coll_index)
+                layer_of[obj.name] = _object_layer(obj, layer_mode, info, coll_index, split_overhead=want_scenes)
         # étiquette qui ne porte que des pièces : couleur à part, masquée à l'ouverture si demandé
         members = {}
         for obj in pool + inst_empties:
@@ -2493,6 +2781,32 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
         def layer_for(obj):
             nm = layer_of.get(obj.name)
             return layer_handle.get(_clean_layer_name(nm)) if nm else None
+
+        # hauteur des noms de pièces : au-dessus de tout ce que porte leur niveau, sans dépasser le bas du niveau
+        # suivant de plus de 50 cm (un mur mitoyen sur trois niveaux ne fait pas flotter les noms du rez-de-chaussée)
+        label_z = {}
+        if room_labels and spaces and storey_of:
+            import numpy as np
+
+            groups = {}
+            for obj in pool:
+                st = storey_of.get(obj.name)
+                if st and obj.name not in spaces:
+                    groups.setdefault(st, []).append(obj)
+            sb, bottoms = {}, {}
+            for st, objs in groups.items():
+                b = _scene_bounds(objs, [], {}, depsgraph, use_modifiers)
+                if b is None:
+                    continue
+                sb[st] = b
+                lows = [z for z in (_object_bottom_z(o, depsgraph, use_modifiers) for o in objs) if z is not None]
+                bottoms[st] = float(np.median(lows)) if lows else float(b[0][2])
+            order = _storey_order(list(sb), sb, tool)
+            for i, st in enumerate(order):
+                top = float(sb[st][1][2])
+                if i + 1 < len(order):
+                    top = min(top, bottoms[order[i + 1]] + 0.5 * uf)
+                label_z[st] = top + _ROOM_LABEL_LIFT_M * uf
 
         # 3) regroupement des maillages partagés (composants)
         share = {}
@@ -2560,7 +2874,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 holder, mesh = evaluated_mesh(obj)
                 try:
                     with builder.add_component_definition(_su(obj.data.name)) as cd:
-                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
+                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back)
                     definitions[key] = cd
                     stats["components"] += 1
                 finally:
@@ -2581,7 +2895,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                             mesh.transform(mtx)
                             if mtx.determinant() < 0:
                                 mesh.flip_normals()
-                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar, soften)
+                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar, soften, paint_back)
                             wrote += 1
                         finally:
                             holder.to_mesh_clear()
@@ -2612,13 +2926,29 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                     vertex_color_objects += 1
                 name = group_name(obj)
                 out_mesh = mesh
+                label = None
                 if obj.name in spaces:
                     # surface exacte dans le nom (avant le retrait), puis faces rentrées contre le moirage
-                    if space_area_in_name:
+                    area = None
+                    if space_area_in_name or room_labels:
                         area = _ifc_space_area_m2(_ifc_entity(tool, obj), tool)
                         if area is None:
                             area = _mesh_floor_area_m2(mesh, obj.matrix_world, uf)
+                    if space_area_in_name:
                         name = _space_label(obj, infos.get(obj.name, {}), area)
+                    if room_labels:
+                        try:
+                            anchor = _room_label_anchor(mesh, obj.matrix_world, _ROOM_LABEL_LIFT_M * uf,
+                                                        label_z.get(storey_of.get(obj.name)))
+                        except Exception:
+                            anchor = None
+                        if anchor is not None:
+                            # openskp écrit `point + leader` là où SketchUp lit le vecteur de la ligne de rappel
+                            # (Text#vector, vérifié dans SketchUp 2027) : un décalage de -point donne un vecteur
+                            # nul, soit l'étiquette posée sur son ancrage, sans ligne de rappel.
+                            p_in = tuple(c * k for c in anchor)
+                            label = (_su_lines(_room_text(obj, infos.get(obj.name, {}), area)), p_in,
+                                     tuple(-c for c in p_in))
                     if inset_bu > 0:
                         how, out = _inset_space(mesh, obj.matrix_world, inset_bu)
                         if how is None:
@@ -2631,7 +2961,13 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 trans, m3 = transform_args(obj)
                 kw = attribute_kwargs(obj)
                 with builder.add_group(_su(name), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
-                    _write_mesh(grp, out_mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften)
+                    _write_mesh(grp, out_mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back)
+                    if label is not None:
+                        try:
+                            grp.add_text(label[0], label[1], leader=label[2])
+                            stats["room_labels"] = stats.get("room_labels", 0) + 1
+                        except Exception as exc:
+                            stats["warnings"].append(f"nom de pièce non écrit en texte ({name}) : {exc}")
                 stats["groups"] += 1
                 stats["objects"] += 1
             finally:
@@ -2660,10 +2996,37 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
             stats["collection_instances"] += 1
             stats["objects"] += 1
 
-        data = bytearray(builder.to_bytes())
+        # 7) scènes par niveau
+        bounds = _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers)
+        stats["scenes"] = []
+        if want_scenes:
+            storey_objs = {}
+            for obj in pool:
+                st = storey_of.get(obj.name)
+                if st and obj.name not in spaces:
+                    storey_objs.setdefault(st, []).append(obj)
+            if storey_objs:
+                try:
+                    stats["scenes"] = _add_level_scenes(builder, stats, layer_handle, storey_objs, bounds,
+                                                        depsgraph, use_modifiers, k, tool)
+                except Exception as exc:
+                    stats["warnings"].append(f"scènes non écrites : {exc}")
+        try:
+            data = bytearray(builder.to_bytes())
+        except Exception as exc:
+            scenes = getattr(builder, "_scenes", None)
+            if not stats["scenes"] or not isinstance(scenes, list):
+                raise
+            scenes.clear()  # gabarit d'openskp inattendu pour les scènes : fichier écrit sans elles
+            stats["warnings"].append(f"scènes retirées, le fichier n'a pas pu les contenir : {exc}")
+            stats["scenes"] = []
+            data = bytearray(builder.to_bytes())
+        if stats["scenes"] and not _light_scenes(data, 1 + len(stats["scenes"])):
+            stats["warnings"].append(
+                "éclairage des scènes non réglé (gabarit openskp inattendu) : un clic sur une scène peut assombrir "
+                "les façades tournées à l'opposé du soleil (Fenêtre > Ombres > Utiliser le soleil pour l'ombrage)")
         stats["view"] = "openskp"
         if view_mode in ("PERSPECTIVE", "PARALLEL"):
-            bounds = _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers)
             if bounds is not None and _frame_camera(data, bounds[0] * k, bounds[1] * k, view_mode):
                 stats["view"] = view_mode.lower()
             else:
@@ -2843,6 +3206,31 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         description="Ajoute la surface de la pièce (NetFloorArea de l'IFC) à son nom : « Pièce 01 Chambre, 5,69 m² »",
         default=True,
     )
+    room_labels: BoolProperty(
+        name="Noms des pièces en texte",
+        description=(
+            "Pose dans chaque pièce un texte SketchUp avec son nom et sa surface (« Chambre », « 5,69 m² »), au point "
+            "le plus éloigné des murs. Il suit l'étiquette « Pièces - <niveau> » et se lit dans les scènes « Plan »"
+        ),
+        default=True,
+    )
+    level_scenes: BoolProperty(
+        name="Scènes par niveau",
+        description=(
+            "Avec « Niveau IFC » : scènes « Vue d'ensemble », « 3D - <niveau> » (niveaux supérieurs, plafonds et "
+            "toiture masqués) et « Plan - <niveau> » (vue de dessus du niveau avec ses pièces). Plafonds et toitures "
+            "passent sur des étiquettes « Plafonds - <niveau> » et « Toiture - <niveau> »"
+        ),
+        default=True,
+    )
+    paint_back: BoolProperty(
+        name="Matière au verso des faces",
+        description=(
+            "Peint le verso de chaque face de la matière de son recto. Sans cela SketchUp montre la couleur des faces "
+            "arrière (bleu-violet) au travers des vitrages et des pièces translucides"
+        ),
+        default=True,
+    )
     merge_planar: BoolProperty(
         name="Fusionner les triangles coplanaires",
         description="Une face SketchUp par surface plane (avec ses trous), au lieu d'un triangle par maille",
@@ -2898,6 +3286,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 soften_dense=self.soften_dense, soften_angle=self.soften_angle, units=self.units,
                 export_spaces=self.export_spaces, hide_spaces=self.hide_spaces,
                 space_inset_mm=self.space_inset, space_area_in_name=self.space_area_in_name,
+                paint_back=self.paint_back, level_scenes=self.level_scenes, room_labels=self.room_labels,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -2908,6 +3297,8 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
             f"({s['instances']} instances), {s['faces']} faces ({s['faces_merged']} polygones fusionnés, "
             f"{s['holes']} trous), {s['materials']} matériaux, {s['layers']} calques",
         )
+        if s.get("scenes"):
+            self.report({"INFO"}, f"{len(s['scenes'])} scène(s) : " + ", ".join(s["scenes"]))
         if s.get("objects_softened"):
             self.report(
                 {"INFO"},
