@@ -9,10 +9,10 @@ pièces. Sur une planche LayOut au 1/50, il garde aussi sa taille d'écran.
 ### Export
 
 - Nouvelle option « Noms dessinés dans la pièce », active par défaut. Le nom et la surface de chaque pièce sont
-  dessinés en lettres planes (DM Sans Medium) dans un groupe « Nom de pièce - <nom> », rangé sur l'étiquette des
-  pièces de son niveau : capitales de 15 cm, soit 3 mm sur un plan au 1/50. Faces horizontales tournées vers le haut,
-  même matière bleu nuit des deux côtés, arêtes masquées. Le groupe se voit dans la scène « Plan » de son niveau,
-  sous la coupe, comme l'ancien texte.
+  dessinés en lettres planes (DM Sans Medium), dans un groupe par pièce (« Nom de pièce - Chambre » pour une chambre)
+  rangé sur l'étiquette des pièces de son niveau : capitales de 15 cm, soit 3 mm sur un plan au 1/50. Faces
+  horizontales tournées vers le haut, même matière bleu nuit des deux côtés, arêtes masquées. Le groupe se voit dans
+  la scène « Plan » de son niveau, sous la coupe, comme l'ancien texte.
 - Le bloc se pose au cœur de la pièce s'il y tient, sinon au point le plus proche où il tient. Il évite ce qui se voit
   dans la pièce vue de dessus : sanitaires et bacs de douche, mobilier, parois vitrées, cloisons, portes, escaliers,
   poteaux. Faute de place, le nom passe sur deux lignes, le bloc tourne d'un quart de tour (couloirs) ou rapetisse
