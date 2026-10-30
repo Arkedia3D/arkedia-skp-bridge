@@ -25,9 +25,10 @@ Elle est gratuite et libre (GPL-3.0 ou ultérieure).
 
 **À l'import**, un composant placé mille fois dans SketchUp devient mille objets Blender qui partagent le même
 maillage. Le fichier reste léger, et chaque copie peut toujours être convertie en IFC, exportée ou éditée. Les
-étiquettes SketchUp deviennent des collections, les scènes deviennent des caméras, les groupes gardent leur
-hiérarchie. Les matériaux gardent leur nom et leurs textures, les couleurs sont converties en linéaire, et les GUID
-et attributs SketchUp restent lisibles dans les propriétés personnalisées (`skp_*`).
+étiquettes SketchUp deviennent des collections, les scènes deviennent des caméras (y compris dans un fichier rendu
+dans une ancienne version, 2013 à 2020, par un SketchUp récent), les groupes gardent leur hiérarchie. Les matériaux
+gardent leur nom et leurs textures, les couleurs sont converties en linéaire, et les GUID et attributs SketchUp
+restent lisibles dans les propriétés personnalisées (`skp_*`).
 
 **À l'export**, les maillages partagés deviennent des composants, les collections (ou les niveaux IFC, chacun sous
 son nom, ou les classes IFC) deviennent des calques, et les triangles coplanaires sont fusionnés en une seule face avec ses trous.
@@ -38,7 +39,8 @@ Bonsai, la classe IFC, le GlobalId, le nom, le niveau et les jeux de propriété
 et les pièces (IfcSpace) peuvent partir aussi : translucides, nommées avec leur surface (« Pièce 01 Chambre,
 28,38 m² »), rentrées de 5 mm pour ne pas scintiller avec les sols et les murs, sur une étiquette par niveau
 masquée à l'ouverture. Le fichier s'ouvre sur une vue d'ensemble cadrée sur le modèle, pas sur un coin vide
-près de l'origine.
+près de l'origine. Depuis un IFC rangé par niveaux, il porte des scènes toutes prêtes, dont un vrai plan coupé à
+1,30 m par niveau, et la position du site avec son nord : les ombres de SketchUp sont celles du lieu.
 
 L'extension fonctionne dans un Blender dont l'interface est en français : elle ne cherche jamais un nœud de shader
 par son nom (traduit), seulement par son type.
@@ -63,7 +65,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.3.1.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.3.2.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -83,7 +85,7 @@ Fichier > Importer > SketchUp Arkedia (.skp).
 | Option | Effet |
 |---|---|
 | Conserver la hiérarchie des groupes | Les groupes SketchUp deviennent des parents Blender (actif par défaut) |
-| Scènes SketchUp en caméras | Chaque scène devient une caméra (actif par défaut) |
+| Scènes SketchUp en caméras | Chaque scène devient une caméra, y compris dans les fichiers enregistrés au format 2013 à 2020 par SketchUp 2021 ou plus récent (actif par défaut) |
 | Conserver GUID et attributs | Écrits en propriétés personnalisées `skp_guid`, `skp_layer`, `skp_attributes`… (actif par défaut) |
 | Ignorer les faces arrière dupliquées | Évite de doubler la géométrie quand le dos d'une face n'a pas la couleur de son recto (actif par défaut) |
 | Ignorer la vérification de mémoire | Importe même si la mémoire disponible semble trop juste pour ce fichier |
@@ -111,6 +113,9 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Surface dans le nom des pièces | Ajoute au nom la surface de l'IFC (NetFloorArea), mesurée avant le retrait : « Pièce 01 Chambre, 28,38 m² » (actif) |
 | Noms des pièces en texte | Un texte SketchUp dans chaque pièce, son nom et sa surface sur deux lignes, au point le plus éloigné des murs. Il suit l'étiquette de la pièce et se lit dans les scènes « Plan » (actif) |
 | Scènes par niveau | Avec « Niveau IFC » : « Vue d'ensemble », puis pour chaque niveau une vue « 3D » en maison de poupée (niveaux supérieurs, plafonds et toiture masqués) et une vue « Plan » de dessus avec ses pièces et leurs noms, par exemple « 3D - 1er étage » et « Plan - 1er étage » (actif) |
+| Plan coupé dans les scènes « Plan » | Un plan de section horizontal par niveau, à la hauteur de coupe au-dessus du sol fini, actif dans la seule scène « Plan » du niveau : murs, baies et équipements tranchés, traits de coupe noirs. Les plans de section sont sur l'étiquette « Plans de coupe », masquée ; les noms des pièces passent 10 cm sous la coupe (actif) |
+| Hauteur de coupe (m) | 1,30 m par défaut : au-dessus des allèges, sous les linteaux |
+| Position et nord de l'IFC | Latitude et longitude du site (IfcSite), nord (TrueNorth), ville et pays de l'adresse écrits dans le modèle et dans chaque scène : les ombres de SketchUp sont celles du lieu. Sans position dans l'IFC, le fichier garde celle du gabarit, Boulder au Colorado (actif) |
 | Matière au verso des faces | Le verso de chaque face prend la matière du recto. Sans cela, SketchUp montre sa couleur de face arrière, un bleu-violet, au travers des vitrages et des pièces translucides (actif) |
 | Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
 | Adoucir les arêtes presque coplanaires | Arête douce et lisse entre deux faces voisines de même matériau à moins de 1 degré l'une de l'autre, quel que soit le nombre de faces : un mur de biais ou une face recalculée par l'IFC ne montre plus de traits parasites. Les arêtes réelles restent visibles (actif) |
@@ -146,8 +151,9 @@ bpy.ops.export_scene.arkedia_skp(
 )
 ```
 
-Pour récupérer les statistiques (faces, composants, avertissements), on appelle directement les fonctions du module,
-qui renvoient un dictionnaire :
+Pour récupérer les statistiques (faces, composants, scènes, position, plans de coupe, avertissements), on appelle
+directement les fonctions du module, qui renvoient un dictionnaire. Après un export lancé par l'opérateur, le même
+dictionnaire reste dans `module._LAST_EXPORT_STATS` :
 
 ```python
 import sys
@@ -158,6 +164,7 @@ module = next(m for nom, m in sys.modules.items()
 
 stats = module.export_skp(r"C:\livraisons\maison.skp", bpy.context, only_selected=False)
 print(stats["faces"], stats["components"], stats["warnings"])
+print(stats.get("geo"), stats.get("plan_cut"))
 
 stats = module.import_skp(r"C:\modeles\maison.skp", bpy.context)
 print(stats["objects"], stats["seconds"])
@@ -269,8 +276,13 @@ pièces ne paraissent que dans les scènes « Plan » (11, 10 et 6 pour les tr
 visible n'a de verso sans matière : avec la couleur des faces arrière passée en magenta, la vue d'ouverture reste
 identique, sans une tache.
 
-Avec la 0.3.1, les traits parasites entre faces presque coplanaires disparaissent des murs : 33 sur un
+Avec la 0.3.1, les traits parasites entre faces presque coplanaires disparaissent des murs : 33 sur un
 appartement et 7 sur un autre avant, aucun après, comptés par script dans SketchUp 2027 sur les mêmes modèles.
+
+Avec la 0.3.2, chaque scène « Plan » de ces modèles montre un plan coupé à 1,30 m au-dessus du sol fini, traits de
+coupe noirs et noms des pièces lisibles, alors que les vues 3D restent entières. SketchUp relit la position du site et
+le nord dans le modèle et dans chaque scène ; la direction du soleil qu'il en tire s'écarte de 0,02° d'un calcul
+indépendant (formules de la NOAA).
 
 ## Les essais
 
@@ -296,12 +308,16 @@ python tests\summarize.py resultats
   la main dans SketchUp donne donc un peu moins que la surface du métré, qui est dans le nom de la pièce, et le volume
   affiché perd moins de 1 %. Une pièce qui n'est pas un volume fermé part sans retrait, avec un avertissement, et
   peut scintiller.
-- Une scène ne garde pas de plan de coupe (limite d'openskp) : les scènes « Plan » regardent le niveau d'en haut,
-  niveaux supérieurs, plafonds et toiture masqués, sans coupe à 1,20 m. Elles sont cadrées pour une fenêtre de
-  proportion 16:10, nord en haut.
+- Les scènes « Plan » sont cadrées pour une fenêtre de proportion 16:10, l'axe vert du modèle en haut (le nord est
+  donné par la position écrite dans le fichier). Le format 2017 n'a pas de remplissage des coupes : les murs coupés
+  sont dessinés en contour, sans aplat.
+- La position du site n'est écrite que si l'IFC la donne (RefLatitude et RefLongitude de l'IfcSite). Le modèle
+  n'est pas « géolocalisé » au sens de SketchUp (pas de carte ni de terrain importés) : seules les ombres en
+  dépendent.
 - Les noms des pièces sont des textes SketchUp à taille d'écran : lisibles à tout zoom, ils commencent au point
-  choisi dans la pièce et peuvent se chevaucher dans les petites pièces voisines. Ils sont posés au-dessus de ce que
-  porte le niveau, si bien qu'en vue 3D, pièces affichées, ils flottent au-dessus des murs.
+  choisi dans la pièce et peuvent se chevaucher dans les petites pièces voisines. Avec le plan coupé, ils sont posés
+  10 cm sous la coupe ; sans lui, au-dessus de ce que porte le niveau, si bien qu'en vue 3D, pièces affichées, ils
+  flottent au-dessus des murs.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de
@@ -312,6 +328,8 @@ python tests\summarize.py resultats
   affiche à l'ouverture un message d'information (« Version de ce fichier : 17.0.1 ») et marque le modèle comme
   modifié ; un enregistrement le fait passer au format récent. Les versions de bureau antérieures à 2027 n'ont pas
   été essayées.
+- Les scènes des fichiers des versions 3 à 8 (SketchUp 3 à 8) ne sont pas lues ; leur géométrie l'est, sauf en
+  version 3.
 - La lecture des fichiers SketchUp 2021 et suivants (nouveau conteneur) repose sur openskp. Nos essais ont porté sur
   des fichiers produits par l'extension, des fichiers enregistrés par SketchUp en version 26.1 et des copies
   enregistrées par SketchUp 2027. Un fichier réel d'architecte peut contenir des cas que nous n'avons pas rencontrés :

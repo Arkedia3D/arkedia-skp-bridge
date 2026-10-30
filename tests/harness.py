@@ -606,7 +606,10 @@ def build_niveaux(param):
     """Deux niveaux façon Bonsai (collections « IfcBuildingStorey/… », sans IFC chargé) : dalle, quatre murs, une
     vitre translucide et une pièce masquée par niveau. Export par niveau avec les pièces : verso de chaque face
     peint de sa matière, une étiquette par niveau et par niveau de pièces, cinq scènes qui masquent les bonnes
-    étiquettes, le nom et la surface de chaque pièce en texte."""
+    étiquettes, le nom et la surface de chaque pièce en texte. Depuis la 0.3.2 : un plan de section par niveau à
+    1,30 m au-dessus du sol (bas médian des objets du niveau, faute d'IFC), sur l'étiquette « Plans de coupe »
+    masquée dans toutes les scènes, actif dans la seule scène « Plan » du niveau, et les noms des pièces 10 cm
+    sous la coupe."""
     from shapely.geometry import Polygon
     ms = mats(2)
     verre = bpy.data.materials.new("Vitrage")
@@ -640,19 +643,23 @@ def build_niveaux(param):
         ob.hide_set(True)
         ob.hide_viewport = True
         textes.append(code + "\n" + A._fr_area(60.0))
-    p_r, p_e = "Pièces - Rez-de-chaussée", "Pièces - 1er étage"
+    p_r, p_e, pc = "Pièces - Rez-de-chaussée", "Pièces - 1er étage", "Plans de coupe"
     attendu = {
         "scenes": ["Vue d'ensemble", "3D - Rez-de-chaussée", "3D - 1er étage", "Plan - Rez-de-chaussée",
                    "Plan - 1er étage"],
         "masquees": {
-            "Vue d'ensemble": [p_e, p_r],
-            "3D - Rez-de-chaussée": ["1er étage", p_e, p_r],
-            "3D - 1er étage": [p_e, p_r],
-            "Plan - Rez-de-chaussée": ["1er étage", p_e],
-            "Plan - 1er étage": [p_r, "Rez-de-chaussée"],
+            "Vue d'ensemble": [p_e, p_r, pc],
+            "3D - Rez-de-chaussée": ["1er étage", p_e, p_r, pc],
+            "3D - 1er étage": [p_e, p_r, pc],
+            "Plan - Rez-de-chaussée": ["1er étage", p_e, pc],
+            "Plan - 1er étage": [p_r, "Rez-de-chaussée", pc],
         },
-        "etiquettes": sorted(["Rez-de-chaussée", "1er étage", p_r, p_e]),
+        "etiquettes": sorted(["Rez-de-chaussée", "1er étage", p_r, p_e, pc]),
         "textes": sorted(textes),
+        "coupes": {"Vue d'ensemble": 0, "3D - Rez-de-chaussée": 0, "3D - 1er étage": 0,
+                   "Plan - Rez-de-chaussée": 1, "Plan - 1er étage": 1},
+        "plans_z_m": [1.3, 4.5],
+        "textes_z_m": {"E01": 4.4, "R01": 1.2},
     }
     return {"niveaux_attendus": attendu,
             "export_kw": {"layer_mode": "IFC_STOREY", "export_spaces": True, "hide_spaces": True}}
@@ -779,8 +786,29 @@ def check_pieces(attendues, inset_mm):
     return out
 
 
+def page_sections(path):
+    """Nombre de plans de section actifs dans chaque scène (fiche lue par openskp, liste du drapeau 0x40 gardée)."""
+    import inspect
+    from openskp import legacy
+    src = inspect.getsource(legacy._read_page_record)
+    old = "    if flags & 0x40:\n        _read_refs(r, r.u32())\n"
+    if src.count(old) != 1:
+        return None
+    ns = {}
+    exec(compile(src.replace(old, "    if flags & 0x40:\n        page['ark_sections'] = _read_refs(r, r.u32())\n"),
+                 "<essai sections>", "exec"), legacy.__dict__, ns)
+    saved = legacy._read_page_record
+    legacy._read_page_record = ns["_read_page_record"]
+    try:
+        d = legacy.full_parse_legacy(path)
+    finally:
+        legacy._read_page_record = saved
+    return {p.get("name"): len(p.get("ark_sections") or []) for p in d.get("pages") or []}
+
+
 def check_niveaux(path, attendu):
-    """Relit le .skp avec openskp : scènes et étiquettes qu'elles masquent, étiquettes, textes, verso des faces."""
+    """Relit le .skp avec openskp : scènes et étiquettes qu'elles masquent, étiquettes, textes, verso des faces,
+    plans de section (altitude, scènes qui les activent) et hauteur des noms des pièces."""
     import openskp
     m = openskp.SkpFile.open(path).parse()
     defs = list(m.definitions.values()) + [m.root]
@@ -794,13 +822,23 @@ def check_niveaux(path, attendu):
         "textes": sorted(t.text for d in defs for t in d.texts),
         "faces_matiere": len(peintes),
         "verso_peint": sum(1 for f in peintes if nom.get(f.back_material_id) == nom.get(f.material_id)),
+        "plans_z_m": sorted(round(-sp.plane[3] / sp.plane[2] * 0.0254, 3) for d in defs for sp in d.section_planes
+                            if abs(sp.plane[2]) > 0.5),
+        "coupes": page_sections(path),
+        "textes_z_m": {t.text.split("\n")[0]: round(t.point[2] * 0.0254, 3) for d in defs for t in d.texts
+                       if t.point is not None},
     }
     out["ok"] = bool(
         out["scenes"] == attendu["scenes"]
         and all(out["masquees"].get(k) == sorted(v) for k, v in attendu["masquees"].items())
         and out["etiquettes"] == attendu["etiquettes"]
         and out["textes"] == attendu["textes"]
-        and out["faces_matiere"] > 0 and out["verso_peint"] == out["faces_matiere"])
+        and out["faces_matiere"] > 0 and out["verso_peint"] == out["faces_matiere"]
+        and len(out["plans_z_m"]) == len(attendu["plans_z_m"])
+        and all(abs(a - b) < 0.005 for a, b in zip(out["plans_z_m"], attendu["plans_z_m"]))
+        and out["coupes"] == attendu["coupes"]
+        and set(out["textes_z_m"]) == set(attendu["textes_z_m"])
+        and all(abs(out["textes_z_m"][k] - v) < 0.005 for k, v in attendu["textes_z_m"].items()))
     return out
 
 

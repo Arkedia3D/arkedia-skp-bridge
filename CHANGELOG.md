@@ -1,5 +1,54 @@
 # Journal des modifications
 
+## 0.3.2, 30 octobre 2026 : ombres du lieu, plans coupés, scènes des anciennes versions
+
+Trois manques relevés en ouvrant nos exports dans SketchUp 2027. Le soleil était celui de Boulder, au Colorado, quel
+que soit le lieu du bien. Les scènes « Plan » regardaient le niveau d'en haut sans le couper. Et un fichier rendu par
+un client dans une ancienne version de SketchUp revenait sans ses scènes.
+
+### Export
+
+- Nouvelle option « Position et nord de l'IFC », active par défaut. La latitude et la longitude du site (IfcSite),
+  le nord (TrueNorth du contexte du modèle) et la ville de l'adresse sont écrits dans le fichier, pour le modèle et
+  pour chaque scène : les ombres de SketchUp sont celles du lieu. La ville tient sur 12 caractères et le pays sur 3
+  (« Abidjan (CI) », « CIV »), la longueur des textes du gabarit d'openskp, pour que rien d'autre ne bouge dans le
+  fichier. Le fuseau horaire est celui du pays pour dix-huit pays (quatorze d'Afrique de l'Ouest et centrale, le
+  Maroc, la France, la Belgique et la Suisse) ; ailleurs, il est déduit de la longitude. Sans position dans l'IFC,
+  le fichier garde le soleil du gabarit.
+- Nouvelle option « Plan coupé dans les scènes « Plan » », active par défaut, avec sa hauteur (1,30 m). Chaque niveau
+  reçoit un plan de section horizontal à cette hauteur au-dessus de son sol fini, actif dans sa seule scène « Plan » :
+  murs, baies et équipements y sont tranchés comme sur un plan d'architecte, et les vues 3D restent entières. Le sol
+  fini est la position du niveau dans l'IFC (IfcBuildingStorey) ; sans IFC, le bas médian des objets du niveau.
+- Les plans de section sont rangés sur une étiquette « Plans de coupe » masquée dans toutes les scènes : leur cadre
+  ne se dessine dans aucune vue, la coupe reste active. Un plan simplement masqué ne convenait pas, SketchUp le
+  réaffiche au clic sur la scène.
+- Les traits de coupe passent du rouge du gabarit au noir, dans les options de rendu comme dans les styles que les
+  scènes appliquent.
+- Les noms des pièces sont posés 10 cm sous la coupe : SketchUp cache les textes situés au-dessus d'un plan de
+  section actif.
+- Les statistiques du dernier export restent lisibles par un script (`_LAST_EXPORT_STATS`), pour les contrôles.
+
+### Import
+
+- Les scènes d'un fichier enregistré dans un format de 2013 à 2020 par SketchUp 2021 ou plus récent (« Enregistrer
+  sous » une ancienne version) sont lues. openskp s'y arrêtait sur de petits écarts de format : identifiants absents,
+  un octet de moins devant les options de rendu et les ombres jusqu'au format 2016, drapeaux de capture récents,
+  vignette en fin de scène. Le correctif ne s'applique que le temps de l'import, comme ceux de l'export.
+
+### Vérifications
+
+- Cas d'essai `niveaux` complété : deux plans de section à 1,30 et 4,50 m, chacun actif dans la seule scène « Plan »
+  de son niveau, étiquette « Plans de coupe » masquée dans les cinq scènes, noms des pièces à 1,20 et 4,40 m. Les 14
+  cas passent.
+- Un appartement et une villa de trois niveaux réexportés depuis leur IFC, rouverts dans SketchUp 2027 et chaque
+  scène activée par script : position, fuseau et nord relus dans le modèle et dans chaque scène (286,2° et 281,5°),
+  un plan de section par niveau (1,30 m ; 1,30, 4,88 et 8,40 m pour la villa), actif dans la seule scène « Plan » de
+  son niveau, aucune coupe à l'ouverture ni dans les vues 3D, 7 et 27 noms de pièces sous la coupe, traits de coupe
+  noirs. Surfaces et dimensions identiques à celles de la 0.3.1, aucune arête parasite.
+- Un fichier modifié dans SketchUp 2027 puis enregistré dans chaque version proposée : les fichiers 2013 à 2020
+  rendent désormais leurs quatre scènes, comme ceux de 2021 et plus. Les versions 4 à 8 (SketchUp 4 à 8) se lisent
+  sans leurs scènes et la version 3 reste refusée, comme avant.
+
 ## 0.3.1, 30 octobre 2026 : murs sans traits parasites
 
 Ouvert dans SketchUp, le modèle d'un appartement montrait 33 traits en trop sur quatre murs, celui d'un autre 7 sur

@@ -30,6 +30,7 @@ import collections
 import json
 import math
 import os
+import struct
 import tempfile
 import time
 
@@ -649,7 +650,8 @@ def _import_skp_impl(filepath, context, keep_hierarchy, import_scenes, store_att
         _check_import_memory(filepath)
     uf = _unit_factor(context)
     skp = openskp.SkpFile.open(filepath)
-    model = skp.parse()
+    with _legacy_scenes_reader():
+        model = skp.parse()
     scene = _instanced_scene(skp)
     skp._parsed = None  # la lecture brute n'est plus utile : c'est la plus grosse part de la mémoire
     progress(0.1)  # la lecture du fichier (la moitié du temps pour un gros modèle) ne donne pas de détail
@@ -1796,6 +1798,109 @@ class _relaxed_openskp:
         return False
 
 
+# Scènes des fichiers enregistrés dans un ancien format (2013 à 2020) par SketchUp 2021 ou plus récent (« Enregistrer
+# sous » une ancienne version, qui passe par l'API C de SketchUp). openskp lit ces scènes (fiche CViewPage au schéma 15)
+# mais s'arrêtait sur des écarts relevés le 30 octobre 2026 dans des fichiers écrits par SketchUp 2027 dans chaque
+# version : l'identifiant persistant de la scène, et celui de son style dans les formats 2013 à 2016, peuvent manquer ;
+# une scène ajoutée par l'utilisateur porte les drapeaux de capture 0x200 à 0x800 (sans données en plus) ; jusqu'au
+# format 2016, les options de rendu et les réglages d'ombre sont précédés d'un octet de moins (2 au lieu de 3), les
+# axes n'ont pas d'octet en tête, et les options de rendu de 2013 font 206 octets comme en 2014 ; une vignette PNG
+# peut suivre les 21 octets de fin (un octet 01, sa longueur, l'image). Les fichiers enregistrés par SketchUp dans sa
+# propre version (fiche au schéma 13) ne sont pas concernés.
+_ARK_PAGE_FIXES = (
+    ("    if schema >= 13:\n        _skip_pid(r)\n",
+     "    if schema >= 13 and r.data[r.pos:r.pos + 3] != b'\\xff\\xfe\\xff':\n        _skip_pid(r)\n"),
+    ("        r.raw(_RENDERING_OPTIONS_LEN[ver] + (3 if schema >= 15 else 0))\n",
+     "        r.raw(_RENDERING_OPTIONS_LEN[ver] + ((3 if ver >= 17 else 2) if schema >= 15 else 0))\n"),
+    ("        r.raw(3 if schema >= 13 else 2)\n",
+     "        r.raw((2 if (schema >= 15 and ver <= 16) else 3) if schema >= 13 else 2)\n"),
+    ("        r.raw(_PAGE_AXES_LEN + (1 if schema >= 13 else 0))\n",
+     "        r.raw(_PAGE_AXES_LEN + ((0 if (schema >= 15 and ver <= 16) else 1) if schema >= 13 else 0))\n"),
+    ("    if schema >= 15:\n        r.raw(_PAGE_TRAILER_LEN - 1)\n        return page\n",
+     "    if schema >= 15:\n"
+     "        r.raw(_PAGE_TRAILER_LEN - 1)\n"
+     "        for _ark_k in (0, 1, 2):\n"
+     "            _ark_n = int.from_bytes(r.data[r.pos + _ark_k:r.pos + _ark_k + 4], 'little')\n"
+     "            if 0 < _ark_n <= len(r.data) - r.pos and "
+     "r.data[r.pos + _ark_k + 4:r.pos + _ark_k + 12] == b'\\x89PNG\\r\\n\\x1a\\n':\n"
+     "                r.raw(_ark_k + 4 + _ark_n)\n"
+     "                break\n"
+     "        return page\n"),
+)
+_ARK_STYLE_FIX = ("    if schema >= 2:\n        _skip_pid(r)\n",
+                  "    if schema >= 2 and r.data[r.pos + 16:r.pos + 19] != b'\\xff\\xfe\\xff':\n        _skip_pid(r)\n")
+_ARK_PAGE_FLAGS = 0xFFF
+_ARK_RENDERING_LEN_2013 = 206
+
+
+def _recompiled(mod, fn, fixes, label):
+    """`fn` (fonction du module `mod`) recompilée avec les remplacements `fixes`, ou None si son texte ne contient pas
+    exactement une fois chacun d'eux."""
+    import inspect
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(fn))
+    for old, _new in fixes:
+        if src.count(old) != 1:
+            return None
+    for old, new in fixes:
+        src = src.replace(old, new)
+    ns = {}
+    exec(compile(src, f"<arkedia {label}>", "exec"), mod.__dict__, ns)
+    return ns.get(fn.__name__)
+
+
+class _legacy_scenes_reader:
+    """Le temps d'un import, openskp lit aussi les scènes des fichiers 2013 à 2020 enregistrés par SketchUp 2021 ou
+    plus récent. `_read_page_record` et `_skip_style` sont recompilés avec les corrections ci-dessus, puis remis en
+    place à la sortie ; si la version d'openskp ne ressemble pas à celle attendue, rien n'est modifié (ces scènes
+    restent absentes, le reste du fichier est lu normalement)."""
+
+    def __enter__(self):
+        import importlib
+
+        self._saved = []
+        self._mod = None
+        self._added_len = False
+        self.patched = False
+        try:
+            mod = importlib.import_module("openskp.legacy")
+            self._mod = mod
+            page_fn = _recompiled(mod, mod._read_page_record, _ARK_PAGE_FIXES, "_read_page_record")
+            style_fn = _recompiled(mod, mod._skip_style, (_ARK_STYLE_FIX,), "_skip_style")
+            lens, flags = mod._RENDERING_OPTIONS_LEN, mod._PAGE_KNOWN_FLAGS
+            if page_fn is None or not isinstance(flags, int) or not isinstance(lens, dict):
+                return self
+            self._saved = [("_read_page_record", mod._read_page_record), ("_PAGE_KNOWN_FLAGS", flags)]
+            mod._read_page_record = page_fn
+            mod._PAGE_KNOWN_FLAGS = flags | _ARK_PAGE_FLAGS
+            if style_fn is not None:
+                self._saved.append(("_skip_style", mod._skip_style))
+                mod._skip_style = style_fn
+                if 13 not in lens:
+                    lens[13] = _ARK_RENDERING_LEN_2013
+                    self._added_len = True
+            self.patched = True
+        except Exception:
+            self._restore()
+        return self
+
+    def _restore(self):
+        mod = getattr(self, "_mod", None)
+        if mod is not None:
+            for name, value in reversed(self._saved):
+                setattr(mod, name, value)
+            if getattr(self, "_added_len", False):
+                mod._RENDERING_OPTIONS_LEN.pop(13, None)
+        self._saved = []
+        self._mod = None
+        self._added_len = False
+
+    def __exit__(self, *exc):
+        self._restore()
+        return False
+
+
 def _drop_collinear(ring, flags):
     """Retire d'un contour les sommets alignés qui n'appartiennent qu'à la région fusionnée."""
     import numpy as np
@@ -2485,8 +2590,13 @@ def _storey_order(names, bounds_of, tool):
     return sorted(names, key=key)
 
 
-def _add_level_scenes(builder, stats, layer_handle, storey_objs, model_bounds, depsgraph, use_modifiers, k, tool):
-    """Ajoute les scènes « Vue d'ensemble », « 3D - <niveau> » et « Plan - <niveau> ». Renvoie les noms écrits."""
+def _add_level_scenes(builder, stats, layer_handle, storey_objs, model_bounds, depsgraph, use_modifiers, k, tool,
+                      cut=None):
+    """Ajoute les scènes « Vue d'ensemble », « 3D - <niveau> » et « Plan - <niveau> ». Renvoie les noms écrits.
+
+    `cut` (plan coupé) : {"layer": étiquette des plans de coupe, "floors": sol fini de chaque niveau en pouces,
+    "height": hauteur de coupe en pouces} ; reçoit "refs" (nom de scène -> plans de section actifs) et "planes"
+    (altitude de chaque plan, en mètres)."""
     import numpy as np
 
     bounds_of = {}
@@ -2512,10 +2622,17 @@ def _add_level_scenes(builder, stats, layer_handle, storey_objs, model_bounds, d
     space_handles = [layer_handle[n] for n in stats.get("space_layers", []) if n in layer_handle]
     written = []
 
-    def add(name, cam, perspective, hidden):
+    cut_layer = cut.get("layer") if cut else None
+
+    def add(name, cam, perspective, hidden, sections=()):
         eye, target, up, height = cam
-        builder.add_scene(_su(name, 200), tuple(eye), tuple(target), tuple(up), perspective=perspective,
+        label = _su(name, 200)
+        if cut_layer is not None:
+            hidden = list(hidden) + [cut_layer]
+        builder.add_scene(label, tuple(eye), tuple(target), tuple(up), perspective=perspective,
                           fov=_CAM_FOV_DEG, ortho_height=max(float(height), 1.0), hidden_layers=sorted(set(hidden)))
+        if sections:
+            cut["refs"][label] = list(sections)
         written.append(name)
 
     cam = _camera_for_box(mlo, mhi, "PERSPECTIVE")
@@ -2539,7 +2656,16 @@ def _add_level_scenes(builder, stats, layer_handle, storey_objs, model_bounds, d
             own = handle(f"Pièces - {nm}")
             hidden = [h for h in space_handles if h != own] + overhead(nm)
             hidden += [h for s in order if s != nm for h in tags(s)]
-            add(f"Plan - {_clean_layer_name(nm)}", cam, False, hidden)
+            sections = ()
+            if cut_layer is not None and nm in cut.get("floors", {}):
+                z = cut["floors"][nm] + cut["height"]
+                slot = _add_cut_plane(builder, ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, z), cut_layer)
+                if slot is None:
+                    cut["failed"] = True
+                else:
+                    sections = (slot,)
+                    cut["planes"].append(round(z * M_PER_INCH, 3))
+            add(f"Plan - {_clean_layer_name(nm)}", cam, False, hidden, sections)
     return written
 
 
@@ -2574,12 +2700,13 @@ def _room_text(obj, info, area_m2):
     return f"{name}\n{_fr_area(area_m2)}" if area_m2 else str(name)
 
 
-def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None):
+def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None, z_world=None):
     """Point (repère de l'objet, unités Blender) où poser le nom d'une pièce : pôle d'inaccessibilité de l'emprise
     de ses faces tournées vers le bas (le point le plus loin des bords, toujours dans la pièce, même en L), à
     `lift_bu` au-dessus du haut de la pièce et au moins à `z_min_world` (hauteur des murs du niveau) : SketchUp cache
     la partie d'un texte qui passe sous une face, et vu de dessus un nom plus large qu'une petite pièce déborde sur
-    les murs. None si le volume n'a pas de sol exploitable."""
+    les murs. `z_world`, s'il est donné, impose l'altitude (sous la coupe des scènes « Plan »). None si le volume
+    n'a pas de sol exploitable."""
     import numpy as np
 
     A = _mesh_arrays(mesh)
@@ -2623,6 +2750,8 @@ def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None):
     z = float(co[:, 2].max()) + lift_bu
     if z_min_world is not None and math.isfinite(z_min_world):
         z = max(z, float(z_min_world))
+    if z_world is not None and math.isfinite(z_world):
+        z = float(z_world)
     world = np.array([x, y, z, 1.0])
     local = np.linalg.solve(M, world)
     return tuple(float(v) for v in local[:3])
@@ -2739,6 +2868,324 @@ def _light_scenes(buf, expected):
     return True
 
 
+# --- position du bien et nord ------------------------------------------------------------------------------
+#
+# Chaque copie des réglages d'ombre d'un fichier écrit par openskp (celle du modèle et une par scène) porte, après
+# l'heure, la ville et le pays en UTF-16 (précédés de ff fe ff et de leur longueur), puis cinq doubles : longitude,
+# latitude, fuseau horaire et direction du nord dans le repère du modèle (sinus et cosinus de l'angle compté depuis
+# l'axe vert, dans le sens horaire). Gabarit : « Boulder (CO) », « USA », -105,283, 40,017, -7, (0, 1). On réécrit
+# ces valeurs en gardant la longueur des deux textes (ville sur 12 caractères, pays sur 3) : rien d'autre ne bouge
+# dans le fichier. Essais du 30 octobre 2026 dans SketchUp 2027 : les valeurs sont relues dans le modèle et dans chaque
+# scène (« Abidjan (CI) », CIV, nord à 286,2° pour le TrueNorth d'un appartement d'essai), et la direction du soleil
+# calculée par SketchUp s'écarte de 0,02° des formules de la NOAA : les ombres sont celles du lieu.
+_GEO_TEMPLATE_TEXT = (b"\xff\xfe\xff\x0c" + "Boulder (CO)".encode("utf-16-le")
+                      + b"\xff\xfe\xff\x03" + "USA".encode("utf-16-le"))
+_GEO_TEMPLATE_VALUES = (-105.283, 40.017, -7.0, 0.0, 1.0)
+_GEO_CITY_LEN = 12
+_GEO_COUNTRY_LEN = 3
+# Pays, tels qu'on les trouve dans une adresse IFC (nom ou code, comparés sans accents ni majuscules) : code à deux
+# lettres (ajouté à la ville quand il tient), code à trois lettres, décalage horaire sans heure d'été (None : déduit
+# de la longitude, pays à plusieurs fuseaux).
+_GEO_COUNTRIES = {name: codes for names, codes in (
+    (("cote d'ivoire", "cote divoire", "ivory coast", "ci", "civ"), ("CI", "CIV", 0)),
+    (("senegal", "sn", "sen"), ("SN", "SEN", 0)),
+    (("mali", "ml", "mli"), ("ML", "MLI", 0)),
+    (("burkina faso", "burkina", "bf", "bfa"), ("BF", "BFA", 0)),
+    (("ghana", "gh", "gha"), ("GH", "GHA", 0)),
+    (("togo", "tg", "tgo"), ("TG", "TGO", 0)),
+    (("guinee", "guinea", "gn", "gin"), ("GN", "GIN", 0)),
+    (("liberia", "lr", "lbr"), ("LR", "LBR", 0)),
+    (("benin", "bj", "ben"), ("BJ", "BEN", 1)),
+    (("niger", "ne", "ner"), ("NE", "NER", 1)),
+    (("nigeria", "ng", "nga"), ("NG", "NGA", 1)),
+    (("cameroun", "cameroon", "cm", "cmr"), ("CM", "CMR", 1)),
+    (("gabon", "ga", "gab"), ("GA", "GAB", 1)),
+    (("congo", "cg", "cog"), ("CG", "COG", 1)),
+    (("maroc", "morocco", "ma", "mar"), ("MA", "MAR", 1)),
+    (("france", "fr", "fra"), ("FR", "FRA", 1)),
+    (("belgique", "belgium", "be", "bel"), ("BE", "BEL", 1)),
+    (("suisse", "switzerland", "ch", "che"), ("CH", "CHE", 1)),
+    (("canada", "ca", "can"), ("CA", "CAN", None)),
+    (("etats-unis", "etats unis", "united states", "usa", "us"), ("US", "USA", None)),
+) for name in names}
+
+
+def _fold(text):
+    """Texte sans accents, en minuscules, espaces simples (pour comparer des noms de pays)."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", str(text or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch)).replace("\u2019", "'")
+    return " ".join(s.lower().split())
+
+
+def _ifc_angle_deg(value):
+    """Angle IFC en degrés décimaux : IfcCompoundPlaneAngleMeasure (degrés, minutes, secondes, millionièmes de
+    seconde, tous du même signe) ou nombre simple. None si absent ou illisible."""
+    if value is None:
+        return None
+    try:
+        parts = [float(v) for v in value]
+    except TypeError:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    return sum(v / f for v, f in zip(parts, (1.0, 60.0, 3600.0, 3.6e9)))
+
+
+def _geo_fit(text, length):
+    """`text` sur exactement `length` unités UTF-16 : coupé, ou complété par des espaces."""
+    out = ""
+    for ch in _su(text, 254):
+        if len((out + ch).encode("utf-16-le")) // 2 > length:
+            break
+        out += ch
+    while len(out.encode("utf-16-le")) // 2 < length:
+        out += " "
+    return out
+
+
+def _ifc_geolocation(tool, scene):
+    """Position du bien et nord lus dans l'IFC chargé par Bonsai : latitude et longitude du site (IfcSite), fuseau
+    horaire, direction du nord dans le repère de la scène Blender (TrueNorth du contexte « Model », sinon
+    IfcMapConversion, sinon l'axe Y), ville et pays de l'adresse ramenés à 12 et 3 caractères. None si l'IFC ne
+    donne pas de position."""
+    try:
+        f = tool.Ifc.get() if tool is not None else None
+    except Exception:
+        f = None
+    if f is None:
+        return None
+    try:
+        sites = list(f.by_type("IfcSite"))
+    except Exception:
+        return None
+    site = sites[0] if sites else None
+    if site is None:
+        return None
+    lat = _ifc_angle_deg(getattr(site, "RefLatitude", None))
+    lon = _ifc_angle_deg(getattr(site, "RefLongitude", None))
+    if (lat is None or lon is None or not (math.isfinite(lat) and math.isfinite(lon))
+            or not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0) or (lat == 0.0 and lon == 0.0)):
+        return None
+    north, source = None, "axe Y"
+    try:
+        contexts = [c for c in f.by_type("IfcGeometricRepresentationContext")
+                    if not c.is_a("IfcGeometricRepresentationSubContext")]
+    except Exception:
+        contexts = []
+    for ctx in sorted(contexts, key=lambda c: (str(getattr(c, "ContextType", "") or "") != "Model")):
+        tn = getattr(ctx, "TrueNorth", None)
+        ratios = [float(v) for v in (getattr(tn, "DirectionRatios", None) or ())][:2] if tn is not None else []
+        if len(ratios) == 2 and math.hypot(*ratios) > 1e-9:
+            north, source = ratios, "TrueNorth"
+            break
+    if north is None:
+        try:
+            for mc in f.by_type("IfcMapConversion"):
+                a, o = getattr(mc, "XAxisAbscissa", None), getattr(mc, "XAxisOrdinate", None)
+                if a is not None and o is not None and math.hypot(float(a), float(o)) > 1e-9:
+                    north, source = [float(o), float(a)], "IfcMapConversion"
+                    break
+        except Exception:
+            pass
+    nx, ny = north if north is not None else (0.0, 1.0)
+    # projet décalé par Bonsai (grandes coordonnées) : la scène Blender peut être tournée par rapport à l'IFC
+    try:
+        gp = scene.BIMGeoreferenceProperties
+        if gp.has_blender_offset:
+            a, o = float(gp.blender_x_axis_abscissa), float(gp.blender_x_axis_ordinate)
+            n = math.hypot(a, o)
+            if n > 1e-9:
+                a, o = a / n, o / n
+                nx, ny = a * nx + o * ny, -o * nx + a * ny
+    except Exception:
+        pass
+    n = math.hypot(nx, ny)
+    nx, ny = nx / n, ny / n
+    town = country = ""
+    addresses = [getattr(site, "SiteAddress", None)]
+    try:
+        addresses += [getattr(b, "BuildingAddress", None) for b in f.by_type("IfcBuilding")]
+    except Exception:
+        pass
+    for ad in addresses:
+        if ad is None:
+            continue
+        town = town or " ".join(str(getattr(ad, "Town", None) or "").split())
+        country = country or " ".join(str(getattr(ad, "Country", None) or "").split())
+    codes = _GEO_COUNTRIES.get(_fold(country))
+    tz = codes[2] if codes and codes[2] is not None else round(lon / 15.0)
+    city = town or " ".join(str(getattr(site, "Name", None) or "").split()) or "Site IFC"
+    if town and codes and len(town) + 5 <= _GEO_CITY_LEN:
+        city = f"{town} ({codes[0]})"
+    if codes:
+        ctry = codes[1]
+    else:
+        ctry = "".join(ch for ch in _fold(country).upper() if "A" <= ch <= "Z")[:_GEO_COUNTRY_LEN]
+    return {"latitude": float(lat), "longitude": float(lon), "fuseau": float(tz), "nord": (nx, ny),
+            "nord_source": source, "nord_deg": round(math.degrees(math.atan2(nx, ny)) % 360.0, 2),
+            "ville": _geo_fit(city, _GEO_CITY_LEN), "pays": _geo_fit(ctry, _GEO_COUNTRY_LEN)}
+
+
+def _write_geolocation(buf, expected, geo):
+    """Écrit sur place la position et le nord `geo` dans chaque copie des réglages d'ombre (le modèle et ses
+    scènes). Rien n'est touché si l'on ne trouve pas exactement `expected` copies du gabarit. Renvoie True si fait."""
+    n = len(_GEO_TEMPLATE_TEXT)
+    heads, at = [], buf.find(_GEO_TEMPLATE_TEXT)
+    while at >= 0:
+        if at + n + 40 <= len(buf):
+            vals = struct.unpack_from("<5d", buf, at + n)
+            if all(abs(a - b) < 1e-6 for a, b in zip(vals, _GEO_TEMPLATE_VALUES)):
+                heads.append(at)
+        at = buf.find(_GEO_TEMPLATE_TEXT, at + 1)
+    text = (b"\xff\xfe\xff\x0c" + geo["ville"].encode("utf-16-le")
+            + b"\xff\xfe\xff\x03" + geo["pays"].encode("utf-16-le"))
+    if len(heads) != expected or len(text) != n:
+        return False
+    for at in heads:
+        buf[at:at + n] = text
+        struct.pack_into("<5d", buf, at + n, geo["longitude"], geo["latitude"], geo["fuseau"],
+                         geo["nord"][0], geo["nord"][1])
+    return True
+
+
+# --- plan coupé dans les scènes « Plan » ---------------------------------------------------------------------
+#
+# Un plan de section horizontal par niveau, à 1,30 m au-dessus du sol fini, tourné vers le bas (il garde ce qui est
+# dessous), actif dans la seule scène « Plan - <niveau> » : SketchUp y montre un vrai plan coupé, murs, baies et
+# équipements tranchés. Une scène enregistre la liste de ses plans de section actifs (drapeau 0x40 de la fiche) ;
+# openskp l'écrit vide, on y glisse le plan du niveau. Les plans de section sont sur une étiquette « Plans de coupe »
+# masquée dans toutes les scènes : leur cadre ne se dessine nulle part et la coupe reste active (vérifié dans SketchUp
+# 2027 ; un plan simplement masqué, lui, réapparaît au clic sur la scène). Les textes au-dessus de la coupe
+# disparaissent aussi : les noms des pièces passent donc 10 cm sous la coupe. Les traits de coupe du style du
+# gabarit sont rouges ; ils passent en noir.
+_CUT_LAYER_NAME = "Plans de coupe"
+_CUT_HEIGHT_M = 1.30
+_CUT_LABEL_BELOW_M = 0.10
+_DRAWBASE_PLAIN = bytes.fromhex("00000001010000000000")
+_SECTION_PLANE_TAIL = 10 + 32   # fin d'un CSectionPlane d'openskp : drawbase, puis le plan (a, b, c, d)
+_SCENE_SECTIONS_AT = struct.pack("<I", 0) + b"\x01" + struct.pack("<dd", -1.0, -1.0) + b"\x00\x00\x01\x01\x01"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _add_cut_plane(builder, point, layer):
+    """Plan de section horizontal tourné vers le bas passant par `point` (pouces), sur l'étiquette `layer`.
+    Renvoie son numéro d'objet dans le fichier (pour la scène qui l'active), ou None si openskp n'a pas écrit
+    l'enregistrement attendu (le plan reste alors sur l'étiquette par défaut, inactif)."""
+    builder.add_section_plane(point, (0.0, 0.0, -1.0))
+    w = getattr(builder, "_geometry_writer", None)
+    buf = getattr(w, "buf", None)
+    if not isinstance(buf, bytearray) or len(buf) < _SECTION_PLANE_TAIL:
+        return None
+    pos = len(buf) - _SECTION_PLANE_TAIL
+    if bytes(buf[pos:pos + 10]) != _DRAWBASE_PLAIN or not (0 < int(layer or 0) < 0x7FFF):
+        return None
+    struct.pack_into("<H", buf, pos + 8, int(layer))
+    return int(w.next_slot) - 1
+
+
+def _scene_sections(data, refs):
+    """Fiches de scènes d'openskp où la liste vide des plans de section actifs est remplacée, pour la scène i, par
+    les numéros d'objets `refs[i]`. None si l'on ne trouve pas exactement une fin de fiche par scène."""
+    n = len(_SCENE_SECTIONS_AT)
+    marks, at = [], data.find(_SCENE_SECTIONS_AT)
+    while at >= 0:
+        if data[at + n + 4:at + n + 12] == _PNG_MAGIC:
+            marks.append(at)
+        at = data.find(_SCENE_SECTIONS_AT, at + 1)
+    if len(marks) != len(refs):
+        return None
+    out, prev = bytearray(), 0
+    for at, slots in zip(marks, refs):
+        out += data[prev:at] + struct.pack("<I", len(slots))
+        for s in slots:
+            out += struct.pack("<H", s) if s < 0x7FFF else struct.pack("<HI", 0x7FFF, s)
+        prev = at + 4
+    out += data[prev:]
+    return bytes(out)
+
+
+def _attach_scene_sections(builder, refs_by_name, state):
+    """Fait écrire par `builder.to_bytes()` les plans de section actifs de chaque scène (nom de scène -> numéros
+    d'objets). `state["ok"]` dit ensuite si l'écriture a eu lieu."""
+    orig = builder._write_scenes
+
+    def write_scenes(first_slot, next_pid, tail):
+        block = orig(first_slot, next_pid, tail)
+        data = _scene_sections(block.data, [refs_by_name.get(s.name, ()) for s in builder._scenes])
+        state["ok"] = data is not None
+        return block if data is None else block._replace(data=data)
+
+    builder._write_scenes = write_scenes
+
+
+# Couleur des traits de coupe, rouge dans le gabarit, à deux endroits : les options de rendu (le modèle et chaque scène
+# en ont une copie : plan actif (102, 110, 141), plan inactif (192, 192, 192), traits de coupe (255, 0, 0), puis leur
+# épaisseur, 4 pixels) et les deux styles du gabarit, dont celui que les scènes appliquent (option 0x1b5d, une
+# couleur). Vérifié dans SketchUp 2027 : SectionDefaultCutColor suit les options de rendu, et une scène activée
+# reprend la couleur de son style.
+_SECTION_COLORS_TEMPLATE = bytes.fromhex("666e8dff" "c0c0c0ff" "ff0000ff" "04000000")
+_STYLE_CUT_COLOR_TEMPLATE = bytes.fromhex("5d1b0000" "01000000" "04000000" "ff0000ff")
+_SECTION_CUT_BLACK = bytes.fromhex("000000ff")
+
+
+def _find_all(buf, pattern):
+    found, at = [], buf.find(pattern)
+    while at >= 0:
+        found.append(at)
+        at = buf.find(pattern, at + 1)
+    return found
+
+
+def _black_section_cuts(buf, expected):
+    """Traits de coupe en noir dans les options de rendu du modèle et de chaque scène et dans les styles. Rien n'est
+    touché si l'on ne trouve pas exactement `expected` copies des options et au moins un style. Renvoie True si
+    fait."""
+    heads = _find_all(buf, _SECTION_COLORS_TEMPLATE)
+    styles = _find_all(buf, _STYLE_CUT_COLOR_TEMPLATE)
+    if len(heads) != expected or not styles:
+        return False
+    for at in heads:
+        buf[at + 8:at + 12] = _SECTION_CUT_BLACK
+    for at in styles:
+        buf[at + 12:at + 16] = _SECTION_CUT_BLACK
+    return True
+
+
+def _storey_floors(groups, tool, depsgraph, use_modifiers):
+    """Altitude du sol fini de chaque niveau (unités Blender, repère de la scène) : position de l'objet du niveau
+    (IfcBuildingStorey) dans Bonsai, sinon médiane du bas des objets du niveau."""
+    import numpy as np
+
+    floors = {}
+    try:
+        f = tool.Ifc.get() if tool is not None else None
+        for st in (f.by_type("IfcBuildingStorey") if f is not None else ()):
+            nm = str(st.Name or getattr(st, "LongName", None) or "Niveau")
+            if nm in floors or nm not in groups:
+                continue
+            ob = tool.Ifc.get_object(st)
+            if ob is not None:
+                z = float(ob.matrix_world.translation.z)
+                if math.isfinite(z):
+                    floors[nm] = z
+    except Exception:
+        pass
+    for nm, objs in groups.items():
+        if nm in floors:
+            continue
+        lows = [z for z in (_object_bottom_z(o, depsgraph, use_modifiers) for o in objs) if z is not None]
+        if lows:
+            floors[nm] = float(np.median(lows))
+    return floors
+
+
 def export_skp(filepath, context, *args, **options):
     """Exporte la scène en .skp (voir `_export_skp_impl` pour les options), tolérance de planéité assouplie."""
     with _relaxed_openskp() as patch:
@@ -2764,7 +3211,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                      merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
                      soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True,
                      space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True, paint_back=True, level_scenes=True,
-                     room_labels=True, soften_coplanar=True):
+                     room_labels=True, soften_coplanar=True, geolocate=True, plan_cut=True,
+                     plan_cut_height=_CUT_HEIGHT_M):
     from openskp import create
 
     t0 = time.time()
@@ -2924,7 +3372,12 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 layer_handle[name] = builder.add_layer(name, color=_SPACE_TAG_RGB, hidden=bool(hide_spaces))
             else:
                 layer_handle[name] = builder.add_layer(name)
-        stats["layers"] = len(layer_handle)
+        cut_layer = None
+        if want_scenes and plan_cut and storey_of:
+            cut_name = _CUT_LAYER_NAME if _CUT_LAYER_NAME not in layer_handle else _CUT_LAYER_NAME + " (Arkedia)"
+            cut_layer = builder.add_layer(cut_name, hidden=True)
+        cut_h = min(5.0, max(0.2, float(plan_cut_height or _CUT_HEIGHT_M)))
+        stats["layers"] = len(layer_handle) + (1 if cut_layer is not None else 0)
         stats["space_layers"] = sorted(space_tags)
         stats["space_layers_hidden"] = bool(hide_spaces and space_tags)
 
@@ -2934,15 +3387,20 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
 
         # hauteur des noms de pièces : au-dessus de tout ce que porte leur niveau, sans dépasser le bas du niveau
         # suivant de plus de 50 cm (un mur mitoyen sur trois niveaux ne fait pas flotter les noms du rez-de-chaussée)
-        label_z = {}
-        if room_labels and spaces and storey_of:
-            import numpy as np
-
-            groups = {}
+        label_z, label_fixed, floor_z = {}, {}, {}
+        groups = {}
+        if (room_labels and spaces and storey_of) or cut_layer is not None:
             for obj in pool:
                 st = storey_of.get(obj.name)
                 if st and obj.name not in spaces:
                     groups.setdefault(st, []).append(obj)
+        if cut_layer is not None:
+            floor_z = _storey_floors(groups, tool, depsgraph, use_modifiers)
+            # sous la coupe, sinon SketchUp cache le nom dans la scène « Plan »
+            label_fixed = {st: z + max(0.05, cut_h - _CUT_LABEL_BELOW_M) * uf for st, z in floor_z.items()}
+        if room_labels and spaces and storey_of:
+            import numpy as np
+
             sb, bottoms = {}, {}
             for st, objs in groups.items():
                 b = _scene_bounds(objs, [], {}, depsgraph, use_modifiers)
@@ -3091,7 +3549,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                     if room_labels:
                         try:
                             anchor = _room_label_anchor(mesh, obj.matrix_world, _ROOM_LABEL_LIFT_M * uf,
-                                                        label_z.get(storey_of.get(obj.name)))
+                                                        label_z.get(storey_of.get(obj.name)),
+                                                        label_fixed.get(storey_of.get(obj.name)))
                         except Exception:
                             anchor = None
                         if anchor is not None:
@@ -3152,6 +3611,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
         # 7) scènes par niveau
         bounds = _scene_bounds(pool, inst_empties, inst_parts, depsgraph, use_modifiers)
         stats["scenes"] = []
+        cut_state = {}
         if want_scenes:
             storey_objs = {}
             for obj in pool:
@@ -3159,11 +3619,21 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 if st and obj.name not in spaces:
                     storey_objs.setdefault(st, []).append(obj)
             if storey_objs:
+                cut = None
+                if cut_layer is not None:
+                    cut = {"layer": cut_layer, "floors": {st: z * k for st, z in floor_z.items()},
+                           "height": cut_h * INCH_PER_M, "refs": {}, "planes": []}
                 try:
                     stats["scenes"] = _add_level_scenes(builder, stats, layer_handle, storey_objs, bounds,
-                                                        depsgraph, use_modifiers, k, tool)
+                                                        depsgraph, use_modifiers, k, tool, cut)
                 except Exception as exc:
                     stats["warnings"].append(f"scènes non écrites : {exc}")
+                if cut is not None:
+                    stats["plan_cut"] = {"hauteur_m": round(cut_h, 3), "plans_m": list(cut["planes"])}
+                    if cut.get("failed"):
+                        stats["warnings"].append("plan coupé non écrit pour un niveau (version d'openskp inattendue)")
+                    if cut["refs"]:
+                        _attach_scene_sections(builder, cut["refs"], cut_state)
         try:
             data = bytearray(builder.to_bytes())
         except Exception as exc:
@@ -3178,6 +3648,25 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
             stats["warnings"].append(
                 "éclairage des scènes non réglé (gabarit openskp inattendu) : un clic sur une scène peut assombrir "
                 "les façades tournées à l'opposé du soleil (Fenêtre > Ombres > Utiliser le soleil pour l'ombrage)")
+        if stats.get("plan_cut") is not None:
+            if stats["plan_cut"]["plans_m"] and not (stats["scenes"] and cut_state.get("ok")):
+                stats["warnings"].append(
+                    "plans de coupe écrits mais pas activés dans les scènes « Plan » (gabarit openskp inattendu) : "
+                    "ils restent sur l'étiquette « Plans de coupe », masquée")
+                stats["plan_cut"]["plans_m"] = []
+            elif stats["plan_cut"]["plans_m"] and not _black_section_cuts(data, 1 + len(stats["scenes"])):
+                stats["warnings"].append("traits de coupe laissés en rouge (style du gabarit inattendu)")
+        stats["geo"] = None
+        if geolocate:
+            geo = _ifc_geolocation(tool if tool is not None else _bonsai_tool(), context.scene)
+            if geo is not None:
+                if _write_geolocation(data, 1 + len(stats["scenes"]), geo):
+                    stats["geo"] = {key: geo[key] for key in ("latitude", "longitude", "fuseau", "nord_deg",
+                                                              "nord_source")}
+                    stats["geo"].update(ville=geo["ville"].strip(), pays=geo["pays"].strip())
+                else:
+                    stats["warnings"].append(
+                        "position et nord de l'IFC non écrits (gabarit openskp inattendu) : soleil du gabarit")
         stats["view"] = "openskp"
         if view_mode in ("PERSPECTIVE", "PARALLEL"):
             if bounds is not None and _frame_camera(data, bounds[0] * k, bounds[1] * k, view_mode):
@@ -3305,6 +3794,10 @@ class ARKEDIA_OT_import_skp(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+# Statistiques du dernier export lancé par l'opérateur (lues par les scripts de contrôle, par exemple ifc_vers_skp.py).
+_LAST_EXPORT_STATS = {}
+
+
 class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
     """Exporter vers SketchUp : groupes et composants natifs, calques, matériaux, attributs IFC"""
 
@@ -3373,6 +3866,31 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
             "Avec « Niveau IFC » : scènes « Vue d'ensemble », « 3D - <niveau> » (niveaux supérieurs, plafonds et "
             "toiture masqués) et « Plan - <niveau> » (vue de dessus du niveau avec ses pièces). Plafonds et toitures "
             "passent sur des étiquettes « Plafonds - <niveau> » et « Toiture - <niveau> »"
+        ),
+        default=True,
+    )
+    plan_cut: BoolProperty(
+        name="Plan coupé dans les scènes « Plan »",
+        description=(
+            "Avec les scènes par niveau : un plan de section horizontal par niveau, à la hauteur de coupe au-dessus "
+            "du sol fini, actif dans la seule scène « Plan - <niveau> » (murs, baies et équipements tranchés, traits "
+            "de coupe noirs). Les plans de section sont sur l'étiquette « Plans de coupe », masquée ; les noms des "
+            "pièces passent sous la coupe"
+        ),
+        default=True,
+    )
+    plan_cut_height: FloatProperty(
+        name="Hauteur de coupe (m)",
+        description="Hauteur du plan coupé au-dessus du sol fini de chaque niveau : 1,30 m passe au-dessus des "
+                    "allèges et sous les linteaux",
+        default=_CUT_HEIGHT_M, min=0.2, max=5.0, precision=2,
+    )
+    geolocate: BoolProperty(
+        name="Position et nord de l'IFC",
+        description=(
+            "Écrit dans le fichier la latitude et la longitude du site (IfcSite), le nord (TrueNorth) et la ville de "
+            "l'adresse : les ombres de SketchUp sont celles du lieu. Sans position dans l'IFC, le fichier garde "
+            "celle du gabarit (Boulder, Colorado)"
         ),
         default=True,
     )
@@ -3449,11 +3967,14 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 export_spaces=self.export_spaces, hide_spaces=self.hide_spaces,
                 space_inset_mm=self.space_inset, space_area_in_name=self.space_area_in_name,
                 paint_back=self.paint_back, level_scenes=self.level_scenes, room_labels=self.room_labels,
-                soften_coplanar=self.soften_coplanar,
+                soften_coplanar=self.soften_coplanar, geolocate=self.geolocate, plan_cut=self.plan_cut,
+                plan_cut_height=self.plan_cut_height,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
             return {"CANCELLED"}
+        _LAST_EXPORT_STATS.clear()
+        _LAST_EXPORT_STATS.update(s)
         self.report(
             {"INFO"},
             f"SKP exporté en {s['seconds']} s : {s['groups']} groupes, {s['components']} composants "
@@ -3462,6 +3983,16 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         )
         if s.get("scenes"):
             self.report({"INFO"}, f"{len(s['scenes'])} scène(s) : " + ", ".join(s["scenes"]))
+        if (s.get("plan_cut") or {}).get("plans_m"):
+            h = f"{s['plan_cut']['hauteur_m']:.2f}".replace(".", ",")
+            self.report({"INFO"}, f"Plan coupé à {h} m au-dessus du sol dans {len(s['plan_cut']['plans_m'])} "
+                                  "scène(s) « Plan »")
+        if s.get("geo"):
+            g = s["geo"]
+            lat = f"{abs(g['latitude']):.4f}".replace(".", ",") + ("° N" if g["latitude"] >= 0 else "° S")
+            lon = f"{abs(g['longitude']):.4f}".replace(".", ",") + ("° E" if g["longitude"] >= 0 else "° O")
+            nord = f"{g['nord_deg']:.1f}".replace(".", ",")
+            self.report({"INFO"}, f"Position : {g['ville']}, {g['pays']}, {lat}, {lon}, nord à {nord}° de l'axe vert")
         if s.get("edges_softened_coplanar"):
             self.report(
                 {"INFO"},
