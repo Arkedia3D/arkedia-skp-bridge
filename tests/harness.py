@@ -6,7 +6,7 @@ Chaque cas : construit une scène, la mesure, l'exporte en .skp, vide la scène,
 mesure à nouveau et compare (surface, volume, boîte englobante, nombre de triangles).
 Un garde-fou coupe le processus si la mémoire engagée dépasse le plafond.
 """
-import sys, os, time, json, math, threading, ctypes, traceback, gc
+import sys, os, time, json, math, threading, ctypes, traceback, gc, collections
 from ctypes import wintypes
 
 ARGS = sys.argv[sys.argv.index("--") + 1:]
@@ -658,12 +658,38 @@ def build_niveaux(param):
             "export_kw": {"layer_mode": "IFC_STOREY", "export_spaces": True, "hide_spaces": True}}
 
 
+def build_presqueplan(param):
+    """Arêtes presque coplanaires (0.3.1) : trois murs de 4 x 0,4 x 2,5 m dont la face avant est coupée en deux au
+    milieu. Mur A : moitié droite pliée de 0,3° (même matériau), l'arête du pli doit être douce et lisse. Mur B :
+    pli de 5°, arête réelle qui reste visible. Mur C : face avant plane en deux matériaux, l'arête du changement de
+    matériau reste visible. Mur D : comme A, moitié droite tournée à l'envers (orientation contraire), son arête doit
+    aussi être douce. Les angles droits restent visibles partout."""
+    ms = mats(2)
+    for nom, pli, deux, oy in (("Mur pli 0,3", 0.3, False, 0.0), ("Mur pli 5", 5.0, False, 2.0),
+                               ("Mur deux matieres", 0.0, True, 4.0), ("Mur pli 0,3 envers", 0.3, None, 6.0)):
+        dy = 2.0 * math.sin(math.radians(pli))
+        V = [(0, oy, 0), (2, oy, 0), (4, oy + dy, 0), (0, oy, 2.5), (2, oy, 2.5), (4, oy + dy, 2.5),
+             (0, oy + 0.4, 0), (4, oy + 0.4, 0), (0, oy + 0.4, 2.5), (4, oy + 0.4, 2.5)]
+        F = [(0, 1, 4, 3), (1, 2, 5, 4), (7, 6, 8, 9), (0, 3, 8, 6), (2, 7, 9, 5), (0, 6, 7, 2, 1), (3, 4, 5, 9, 8)]
+        if deux is None:
+            F[1] = (4, 5, 2, 1)
+        me = bpy.data.meshes.new(nom)
+        me.from_pydata(V, [], F)
+        me.update()
+        me.materials.append(ms[0])
+        me.materials.append(ms[1])
+        if deux:
+            me.polygons[1].material_index = 1
+        link(bpy.data.objects.new(nom, me))
+    return {"aretes_attendues": {"presque_douces_min": 2}}
+
+
 BUILD = {
     "boxes": build_boxes, "inst": build_inst, "sphere": build_sphere, "gridflat": build_gridflat,
     "gridholes": build_gridholes, "terrain": build_terrain, "degenerate": build_degenerate,
     "transforms": build_transforms, "mm": build_mm, "modifiers": build_modifiers,
     "texture": build_texture, "unicode": build_unicode, "mod": build_mod, "collinst": build_collinst,
-    "pieces": build_pieces, "niveaux": build_niveaux,
+    "pieces": build_pieces, "niveaux": build_niveaux, "presqueplan": build_presqueplan,
 }
 
 
@@ -778,6 +804,55 @@ def check_niveaux(path, attendu):
     return out
 
 
+def check_aretes(path, attendu):
+    """Relit le .skp avec openskp et classe les arêtes partagées par deux faces : presque coplanaires de même
+    matériau (moins de 1°, doivent être douces), changement de matériau dans un même plan et angles francs (doivent
+    rester visibles)."""
+    import openskp
+    m = openskp.SkpFile.open(path).parse()
+    out = {"presque": 0, "presque_douces": 0, "matieres": 0, "matieres_douces": 0, "franches": 0, "franches_douces": 0}
+    for d in list(m.definitions.values()) + [m.root]:
+        V = d.vertices
+        usage = collections.defaultdict(list)
+        normales = {}
+        for fid, f in d.faces.items():
+            if not f.loops:
+                continue
+            pts = []
+            for eid, sens in f.loops[0]:
+                e = d.edges[eid]
+                v = V[e.v1_id if sens == 1 else e.v2_id]
+                pts.append((v.x, v.y, v.z))
+            n = np.zeros(3)
+            for i in range(len(pts)):
+                a, b = np.array(pts[i]), np.array(pts[(i + 1) % len(pts)])
+                n += np.cross(a, b)
+            ln = np.linalg.norm(n)
+            if ln < 1e-12:
+                continue
+            normales[fid] = n / ln
+            for loop in f.loops:
+                for eid, _ in loop:
+                    usage[eid].append(fid)
+        for eid, fids in usage.items():
+            if len(fids) != 2 or fids[0] not in normales or fids[1] not in normales:
+                continue
+            fa, fb = d.faces[fids[0]], d.faces[fids[1]]
+            ang = math.degrees(math.acos(max(-1.0, min(1.0, abs(float(normales[fids[0]] @ normales[fids[1]]))))))
+            douce = bool(d.edges[eid].soft)
+            if ang < 1.0 and fa.material_id == fb.material_id:
+                cle = "presque"
+            elif ang < 1.0:
+                cle = "matieres"
+            else:
+                cle = "franches"
+            out[cle] += 1
+            out[cle + "_douces"] += int(douce)
+    out["ok"] = bool(out["presque"] >= attendu["presque_douces_min"] and out["presque_douces"] == out["presque"]
+                     and out["matieres"] > 0 and out["matieres_douces"] == 0 and out["franches_douces"] == 0)
+    return out
+
+
 def main():
     res = {"case": CASE, "param": PARAM, "status": "OK", "blender": bpy.app.version_string}
     path = os.path.join(OUTDIR, TAG + ".skp")
@@ -796,6 +871,10 @@ def main():
                                              **(res["build"] or {}).get("export_kw", {}))
             res["size_mb"] = round(os.path.getsize(path) / 2 ** 20, 3)
             log("export : %s" % json.dumps(res["export"], default=str))
+            if (res["build"] or {}).get("aretes_attendues"):
+                with Phase("controle_aretes"):
+                    res["aretes"] = check_aretes(path, res["build"]["aretes_attendues"])
+                log("arêtes : %s" % json.dumps(res["aretes"], ensure_ascii=False))
             if (res["build"] or {}).get("niveaux_attendus"):
                 with Phase("controle_niveaux"):
                     res["niveaux"] = check_niveaux(path, res["build"]["niveaux_attendus"])
@@ -809,6 +888,8 @@ def main():
         else:
             res = json.load(open(partial, encoding="utf-8"))
             res["status"] = "OK" if (res.get("niveaux") or {}).get("ok", True) else "ECART_NIVEAUX"
+            if not (res.get("aretes") or {}).get("ok", True):
+                res["status"] = "ECART_ARETES"
             bpy.ops.wm.read_factory_settings(use_empty=True)
             if res.get("unit_scale") and abs(res["unit_scale"] - 1.0) > 1e-12:
                 bpy.context.scene.unit_settings.system = "METRIC"

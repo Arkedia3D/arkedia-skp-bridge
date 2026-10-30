@@ -1,5 +1,38 @@
 # Journal des modifications
 
+## 0.3.1, 30 octobre 2026 : murs sans traits parasites
+
+Ouvert dans SketchUp, le modèle d'un appartement montrait 33 traits en trop sur quatre murs, celui d'un autre 7 sur
+un mur. Deux faces voisines presque dans le même plan, à moins d'un degré l'une de l'autre, ne peuvent pas devenir
+une seule face plane : elles restaient séparées par une arête visible. L'adoucissement de la 0.2.1 ne traitait que
+les maillages d'au moins 2 000 faces.
+
+### Export
+
+- Nouvelle option « Adoucir les arêtes presque coplanaires », active par défaut : l'arête entre deux faces voisines
+  de même matériau dont les normales diffèrent de moins de 1 degré est écrite douce et lisse, quel que soit le nombre
+  de faces de l'objet. Les arêtes réelles restent visibles : angle plus franc, changement de matériau, bord libre.
+- Le voisinage se lit sur la position des sommets, comme dans SketchUp : des sommets en double dans un maillage IFC
+  ne laissent plus passer une arête.
+- Deux faces côte à côte dans le même plan mais d'orientation contraire sont traitées de même. Deux faces repliées
+  l'une sur l'autre gardent leur arête, qui signale un recouvrement réel.
+- Un polygone gauchi, découpé en triangles à l'écriture, n'affiche plus ses diagonales.
+- openskp donne à chaque arête les réglages de la première face qui la crée. Le temps de l'export, l'extension lui
+  indique une à une les arêtes à adoucir, comme elle le fait déjà pour la tolérance de planéité ; tout est remis en
+  place à la fin.
+
+### Vérifications
+
+- Nouveau cas d'essai `presqueplan` : quatre murs dont la face avant est coupée en deux (pli de 0,3°, pli de 5°,
+  deux matériaux dans un même plan, pli de 0,3° avec une moitié à l'envers). Relues par openskp, les deux arêtes à
+  0,3° sont douces ; celle du pli de 5°, celle du changement de matériau et les angles droits restent visibles. Les
+  14 cas d'essai passent.
+- Trois modèles réexportés depuis leur IFC, rouverts dans SketchUp 2027, arêtes comptées par script : premier
+  appartement, de 33 traits en trop à aucun ; second appartement, de 7 à aucun ; villa de trois niveaux, aucun avant
+  comme après. Surfaces, dimensions, scènes et noms des pièces sont identiques à ceux de la 0.3.0. Sur le premier
+  appartement, une ligne reste au tableau de la porte d'entrée : dans l'IFC, la face de l'ouverture y recouvre celle
+  du mur sur 2 mm, et ce recouvrement réel garde son arête.
+
 ## 0.3.0, 29 octobre 2026 : scènes par niveau, noms des pièces, fin des taches bleues
 
 Ouverte dans SketchUp, la villa de trois niveaux montrait des taches bleu-violet derrière les vitrages et sur les

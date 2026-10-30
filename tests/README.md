@@ -56,6 +56,7 @@ processus qui le dépasse et le consigne dans le résultat.
 | `collinst` | collections instanciées : décalage d'instance, imbrication, miroir, échelle négative |
 | `pieces` | pièces façon Bonsai (volumes « IfcSpace/… » masqués, collés au sol, au plafond et aux murs) : trois rectangulaires, une en L, une qui contourne une trémie collée au mur. Export avec l'option pièces ; à la relecture, chacune doit être rentrée de 5 mm, nommée avec sa surface et rangée sur une étiquette masquée |
 | `niveaux` | deux niveaux façon Bonsai (collections « IfcBuildingStorey/… », sans IFC chargé), chacun avec dalle, murs, vitre translucide et pièce masquée. Export par niveau avec les pièces ; relu par openskp, le fichier doit avoir cinq scènes qui masquent les bonnes étiquettes, quatre étiquettes, le nom et la surface de chaque pièce en texte, et le verso de chaque face peint de la matière du recto |
+| `presqueplan` | quatre murs dont la face avant est coupée en deux : pli de 0,3°, pli de 5°, deux matériaux dans un même plan, pli de 0,3° avec une moitié à l'envers. Relu par openskp, les arêtes à moins de 1° entre faces de même matériau doivent être douces, celles du pli de 5°, du changement de matériau et des angles droits visibles (0.3.1) |
 
 Les mesures de mémoire sont celles de la mémoire engagée par le processus Blender, relevée toutes les 50 ms.
 

@@ -1646,6 +1646,18 @@ def _fits_one_plane(outer, holes, tol_in):
 _PLANE_TOL = [0.001]
 _ARK_TOL_SRC_OLD = "tol = max(span, 1.0) * 1e-6"
 _ARK_TOL_SRC_NEW = "tol = max(max(span, 1.0) * 1e-6, _ARK_PLANE_TOL[0])"
+# Arêtes adoucies une à une : openskp donne à chaque arête les réglages de la première face qui la crée. Pendant
+# l'écriture d'un maillage, _SOFT_PAIRS[0] contient les arêtes (paires de points, en pouces) à rendre douces et
+# lisses quelle que soit la face qui les crée ; _SOFT_PAIRS[1] compte celles qui l'ont été.
+_SOFT_COPLANAR_DEG = 1.0
+_SOFT_PAIRS = [None, 0]
+_ARK_EDGE_SRC_OLD = "self._drawbase(hidden=hidden_edges, soft=soft_edges, smooth=smooth_edges)"
+_ARK_EDGE_SRC_NEW = (
+    "_ark_s = _ARK_SOFT_PAIRS[0] is not None and frozenset((points[v1_idx], points[v2_idx])) in _ARK_SOFT_PAIRS[0]\n"
+    "{ind}if _ark_s and not soft_edges:\n"
+    "{ind}    _ARK_SOFT_PAIRS[1] += 1\n"
+    "{ind}self._drawbase(hidden=hidden_edges, soft=soft_edges or _ark_s, smooth=smooth_edges or _ark_s)"
+)
 
 
 def _relaxed_plane_functions(mod):
@@ -1691,14 +1703,16 @@ def _relaxed_plane_functions(mod):
 
 
 class _relaxed_openskp:
-    """Le temps d'un export, openskp accepte les faces planes à la tolérance de SketchUp près.
+    """Le temps d'un export, openskp accepte les faces planes à la tolérance de SketchUp près et sait adoucir une
+    arête précise.
 
     Trois contrôles d'openskp comparent les sommets d'une face à son plan avec une tolérance de
     1e-6 de l'étendue de la face (contour, test de repli et trous). Le troisième est écrit en ligne
-    dans `write_face` : on en recompile le texte avec la tolérance de `_PLANE_TOL`. Tout est remis
+    dans `write_face` : on en recompile le texte avec la tolérance de `_PLANE_TOL`. De même, `_write_edge_chain`
+    est recompilé pour qu'une arête citée dans `_SOFT_PAIRS` soit écrite douce et lisse. Tout est remis
     en place à la sortie (la bibliothèque est partagée avec les autres add-ons) ; si la version
-    d'openskp ne ressemble pas à celle attendue, rien n'est modifié et les faces limites sont
-    simplement découpées en triangles.
+    d'openskp ne ressemble pas à celle attendue, la partie concernée n'est pas modifiée : les faces limites sont
+    alors découpées en triangles, ou les arêtes presque coplanaires restent visibles.
     """
 
     def __enter__(self):
@@ -1708,40 +1722,74 @@ class _relaxed_openskp:
 
         self._saved = {}
         self.patched = False
+        self.edge_patched = False
         try:
             mod = importlib.import_module("openskp.create")
             cls = mod._ArchiveWriter
-            src = textwrap.dedent(inspect.getsource(cls.write_face))
-            if src.count(_ARK_TOL_SRC_OLD) != 1:
-                return self
-            ns = {}
-            mod.__dict__["_ARK_PLANE_TOL"] = _PLANE_TOL
-            exec(compile(src.replace(_ARK_TOL_SRC_OLD, _ARK_TOL_SRC_NEW), "<arkedia write_face>", "exec"), mod.__dict__, ns)
-            plane_fn, coplanar_fn = _relaxed_plane_functions(mod)
-            self._saved = {
-                "mod": mod, "cls": cls, "write_face": cls.write_face,
-                "plane": mod._plane_from_polygon, "coplanar": mod._is_coplanar,
-            }
-            cls.write_face = ns["write_face"]
-            mod._plane_from_polygon = plane_fn
-            mod._is_coplanar = coplanar_fn
-            self.patched = True
         except Exception:
-            self._restore()
+            return self
+        try:
+            src = textwrap.dedent(inspect.getsource(cls.write_face))
+            if src.count(_ARK_TOL_SRC_OLD) == 1:
+                ns = {}
+                mod.__dict__["_ARK_PLANE_TOL"] = _PLANE_TOL
+                exec(compile(src.replace(_ARK_TOL_SRC_OLD, _ARK_TOL_SRC_NEW), "<arkedia write_face>", "exec"), mod.__dict__, ns)
+                plane_fn, coplanar_fn = _relaxed_plane_functions(mod)
+                self._saved.update({
+                    "mod": mod, "cls": cls, "write_face": cls.write_face,
+                    "plane": mod._plane_from_polygon, "coplanar": mod._is_coplanar,
+                })
+                cls.write_face = ns["write_face"]
+                mod._plane_from_polygon = plane_fn
+                mod._is_coplanar = coplanar_fn
+                self.patched = True
+        except Exception:
+            self._restore_faces()
+        try:
+            src = textwrap.dedent(inspect.getsource(cls._write_edge_chain))
+            lines = [ln for ln in src.splitlines() if _ARK_EDGE_SRC_OLD in ln]
+            if src.count(_ARK_EDGE_SRC_OLD) == 1 and len(lines) == 1:
+                ind = lines[0][:len(lines[0]) - len(lines[0].lstrip())]
+                ns = {}
+                mod.__dict__["_ARK_SOFT_PAIRS"] = _SOFT_PAIRS
+                exec(compile(src.replace(_ARK_EDGE_SRC_OLD, _ARK_EDGE_SRC_NEW.format(ind=ind)),
+                             "<arkedia _write_edge_chain>", "exec"), mod.__dict__, ns)
+                self._saved.update({"mod": mod, "cls": cls, "edge_chain": cls._write_edge_chain})
+                cls._write_edge_chain = ns["_write_edge_chain"]
+                self.edge_patched = True
+        except Exception:
+            self._restore_edges()
         return self
 
-    def _restore(self):
+    def _restore_faces(self):
         sv = self._saved
-        if sv:
-            try:
-                sv["cls"].write_face = sv["write_face"]
-                sv["mod"]._plane_from_polygon = sv["plane"]
-                sv["mod"]._is_coplanar = sv["coplanar"]
+        try:
+            if "write_face" in sv:
+                sv["cls"].write_face = sv.pop("write_face")
+                sv["mod"]._plane_from_polygon = sv.pop("plane")
+                sv["mod"]._is_coplanar = sv.pop("coplanar")
+            if "mod" in sv:
                 sv["mod"].__dict__.pop("_ARK_PLANE_TOL", None)
-            except Exception:
-                pass
-        self._saved = {}
+        except Exception:
+            pass
         self.patched = False
+
+    def _restore_edges(self):
+        sv = self._saved
+        try:
+            if "edge_chain" in sv:
+                sv["cls"]._write_edge_chain = sv.pop("edge_chain")
+            if "mod" in sv:
+                sv["mod"].__dict__.pop("_ARK_SOFT_PAIRS", None)
+        except Exception:
+            pass
+        _SOFT_PAIRS[0] = None
+        self.edge_patched = False
+
+    def _restore(self):
+        self._restore_faces()
+        self._restore_edges()
+        self._saved = {}
 
     def __exit__(self, *exc):
         self._restore()
@@ -1985,6 +2033,71 @@ def _duplicate_polygons(A, k):
     return dup, set(kept[flipped].tolist())
 
 
+def _near_coplanar_pairs(mesh, A, pts, angle_deg, exclude=None, k=1.0):
+    """Arêtes partagées par exactement deux polygones de même matériau dont les normales diffèrent de moins de
+    `angle_deg` degrés, en paires de points (ceux de `pts`, en pouces). Une surface presque plane découpée en
+    plusieurs faces (mur de biais recalculé par l'IFC, face gauchie de quelques dixièmes de millimètre) ne montre
+    plus ses arêtes internes ; les arêtes réelles (angle plus franc, changement de matériau, bord libre) restent.
+
+    Le voisinage se lit sur les coordonnées et non sur les arêtes de Blender : un maillage IFC a souvent des sommets
+    en double au même endroit, que SketchUp réunit (il partage les sommets par leur position). Deux faces voisines
+    d'orientation contraire comptent aussi (verso peint de la même matière, elles ont le même aspect). Les polygones
+    de `exclude` (doublons écrits une seule fois) ne comptent pas."""
+    import numpy as np
+
+    n_poly = A["n_poly"]
+    if n_poly < 2:
+        return None
+    lv, ls, lt = A["lv"], A["lstart"], A["ltotal"]
+    keys = np.asarray(pts, dtype=np.float64)
+    uniq, pid = np.unique(keys, axis=0, return_inverse=True)
+    pid = pid.reshape(-1)
+    loop_poly = np.repeat(np.arange(n_poly, dtype=np.int64), lt)
+    nxt = np.arange(len(lv)) + 1
+    last = ls + lt - 1
+    nxt[last] = ls
+    a_pt, b_pt = pid[lv], pid[lv[nxt]]
+    lo, hi = np.minimum(a_pt, b_pt), np.maximum(a_pt, b_pt)
+    ok = lo != hi
+    if exclude is not None:
+        ok &= ~exclude[loop_poly]
+    code = lo[ok].astype(np.int64) * (len(uniq) + 1) + hi[ok]
+    poly = loop_poly[ok]
+    order = np.argsort(code, kind="stable")
+    code, poly = code[order], poly[order]
+    first = np.ones(code.size, dtype=bool)
+    first[1:] = code[1:] != code[:-1]
+    starts = np.nonzero(first)[0]
+    counts = np.diff(np.append(starts, code.size))
+    two = starts[counts == 2]
+    if two.size == 0:
+        return None
+    a, b, c = poly[two], poly[two + 1], code[two]
+    keep = (a != b) & (A["mat"][a] == A["mat"][b])
+    a, b, c = a[keep], b[keep], c[keep]
+    if a.size == 0:
+        return None
+    cosang = np.einsum("ij,ij->i", A["nrm"][a], A["nrm"][b])
+    near = np.abs(cosang) >= np.cos(np.radians(angle_deg))
+    lo, hi = c // (len(uniq) + 1), c % (len(uniq) + 1)
+    flip = near & (cosang < 0)
+    if flip.any():
+        # orientation contraire : seulement si les deux faces sont de part et d'autre de l'arête (même plan,
+        # côte à côte), pas repliées l'une sur l'autre (tôle sans épaisseur, dont le contour doit rester visible)
+        P, Q = uniq[lo[flip]], uniq[hi[flip]]
+        d = Q - P
+        d = d / np.maximum(np.linalg.norm(d, axis=1), 1e-12)[:, None]
+        va, vb = A["cen"][a[flip]] * k - P, A["cen"][b[flip]] * k - P
+        wa = va - np.einsum("ij,ij->i", va, d)[:, None] * d
+        wb = vb - np.einsum("ij,ij->i", vb, d)[:, None] * d
+        near[np.nonzero(flip)[0]] = np.einsum("ij,ij->i", wa, wb) < 0
+    lo, hi = lo[near], hi[near]
+    if lo.size == 0:
+        return None
+    rows = [tuple(r) for r in uniq.tolist()]
+    return {frozenset((rows[i], rows[j])) for i, j in zip(lo.tolist(), hi.tolist())}
+
+
 def _soften_mask(A, angle_deg):
     """Polygones entourés de voisins presque coplanaires (angle entre normales ≤ `angle_deg` sur chaque arête).
 
@@ -2011,7 +2124,20 @@ def _soften_mask(A, angle_deg):
     return (shared >= A["ltotal"]) & (worst <= angle_deg)
 
 
-def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, soften=None, paint_back=True):
+def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, soften=None, paint_back=True,
+                soft_coplanar=None):
+    """Écrit un maillage (voir `_write_mesh_body`) ; `soft_coplanar` (degrés) adoucit les arêtes entre faces voisines
+    presque coplanaires de même matériau, quel que soit le nombre de faces de l'objet."""
+    n0 = _SOFT_PAIRS[1]
+    try:
+        _write_mesh_body(target, mesh, k, handles, textured, stats, use_uv, merge, soften, paint_back, soft_coplanar)
+    finally:
+        _SOFT_PAIRS[0] = None
+        if _SOFT_PAIRS[1] > n0:
+            stats["edges_softened_coplanar"] = stats.get("edges_softened_coplanar", 0) + _SOFT_PAIRS[1] - n0
+
+
+def _write_mesh_body(target, mesh, k, handles, textured, stats, use_uv, merge, soften, paint_back, soft_coplanar):
     """Écrit les polygones d'un maillage Blender (unités de la scène) dans un groupe ou un composant.
 
     `paint_back` : le verso de chaque face reçoit la matière du recto (sauf matière texturée). Sans cela, SketchUp
@@ -2091,6 +2217,14 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
         absorbed |= poly_nonfinite
         if n_bad:
             _skip_face(stats, ValueError("coordonnées non finies"), n_bad)
+
+    # un maillage dense déjà adouci (terrain, scan) n'en a pas besoin, et la liste des arêtes y serait très longue
+    if soft_coplanar and not (soften and n_poly >= soften["min_faces"]):
+        try:
+            _SOFT_PAIRS[0] = _near_coplanar_pairs(mesh, A, pts, soft_coplanar, exclude=absorbed, k=k)
+        except Exception as exc:
+            _SOFT_PAIRS[0] = None
+            stats["warnings"].append(f"arêtes presque coplanaires non adoucies : {exc}")
 
     if merge and n_poly > 1:
         textured_slots = {i for i, h in enumerate(handles) if h is not None and h in textured}
@@ -2180,7 +2314,18 @@ def _write_mesh(target, mesh, k, handles, textured, stats, use_uv, merge=True, s
         mesh.loop_triangles.foreach_get("polygon_index", tp)
         mesh.loop_triangles.foreach_get("material_index", tm)
         tv, tl = tv.reshape(-1, 3), tl.reshape(-1, 3)
-        for i in np.nonzero(np.isin(tp, np.unique(np.asarray(bad, dtype=np.int32))))[0].tolist():
+        sel = np.nonzero(np.isin(tp, np.unique(np.asarray(bad, dtype=np.int32))))[0].tolist()
+        if soft_coplanar:
+            # diagonales internes d'un polygone gauchi découpé en triangles : Blender n'y montre aucune arête
+            inner = collections.Counter()
+            for i in sel:
+                a_, b_, c_ = (pts[j] for j in tv[i].tolist())
+                for e_ in (frozenset((a_, b_)), frozenset((b_, c_)), frozenset((c_, a_))):
+                    inner[(int(tp[i]), e_)] += 1
+            diag = {e_ for (_, e_), n_ in inner.items() if n_ >= 2}
+            if diag:
+                _SOFT_PAIRS[0] = (_SOFT_PAIRS[0] or set()) | diag
+        for i in sel:
             handle = handle_for(int(tm[i]))
             kwargs = {"material": handle}
             if smooth_l[int(tp[i])] or (soft_l is not None and soft_l[int(tp[i])]):
@@ -2599,6 +2744,10 @@ def export_skp(filepath, context, *args, **options):
     with _relaxed_openskp() as patch:
         stats = _export_skp_impl(filepath, context, *args, **options)
         stats["plane_patch"] = patch.patched
+        stats["edge_patch"] = patch.edge_patched
+        if options.get("soften_coplanar", True) and not patch.edge_patched:
+            stats["warnings"].append(
+                "arêtes presque coplanaires non adoucies (version d'openskp inattendue) : elles restent visibles")
         if not patch.patched:
             stats["warnings"].append(
                 "tolérance de planéité d'openskp non assouplie (version inattendue) : les faces presque planes "
@@ -2615,7 +2764,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                      merge_planar=True, view_mode="PERSPECTIVE", soften_dense=True, units="SCENE",
                      soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True,
                      space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True, paint_back=True, level_scenes=True,
-                     room_labels=True):
+                     room_labels=True, soften_coplanar=True):
     from openskp import create
 
     t0 = time.time()
@@ -2623,6 +2772,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
     uf = _unit_factor(context)
     inset_bu = max(0.0, float(space_inset_mm or 0.0)) * 1e-3 * uf
     soften = {"angle": min(89.0, max(1.0, float(soften_angle))), "min_faces": _SOFTEN_MIN_FACES} if soften_dense else None
+    soft_coplanar = _SOFT_COPLANAR_DEG if soften_coplanar else None
     depsgraph = context.evaluated_depsgraph_get()
 
     selection = only_selected and bool(context.selected_objects)
@@ -2874,7 +3024,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 holder, mesh = evaluated_mesh(obj)
                 try:
                     with builder.add_component_definition(_su(obj.data.name)) as cd:
-                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back)
+                        _write_mesh(cd, mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back,
+                                   soft_coplanar=soft_coplanar)
                     definitions[key] = cd
                     stats["components"] += 1
                 finally:
@@ -2895,7 +3046,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                             mesh.transform(mtx)
                             if mtx.determinant() < 0:
                                 mesh.flip_normals()
-                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar, soften, paint_back)
+                            _write_mesh(cd, mesh, k, handles_of(ob), textured, stats, use_textures, merge_planar, soften, paint_back,
+                                   soft_coplanar=soft_coplanar)
                             wrote += 1
                         finally:
                             holder.to_mesh_clear()
@@ -2961,7 +3113,8 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 trans, m3 = transform_args(obj)
                 kw = attribute_kwargs(obj)
                 with builder.add_group(_su(name), translation=trans, matrix3x3=m3, layer=layer_for(obj), **kw) as grp:
-                    _write_mesh(grp, out_mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back)
+                    _write_mesh(grp, out_mesh, k, handles_of(obj), textured, stats, use_textures, merge_planar, soften, paint_back,
+                                   soft_coplanar=soft_coplanar)
                     if label is not None:
                         try:
                             grp.add_text(label[0], label[1], leader=label[2])
@@ -3245,6 +3398,15 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         ),
         default=True,
     )
+    soften_coplanar: BoolProperty(
+        name="Adoucir les arêtes presque coplanaires",
+        description=(
+            "Arête douce et lisse entre deux faces voisines de même matériau dont les normales diffèrent de moins "
+            "de 1 degré : un mur de biais ou une face recalculée par l'IFC ne montre plus de traits parasites. "
+            "Les arêtes réelles (angle plus franc, changement de matériau, bord) restent visibles"
+        ),
+        default=True,
+    )
     soften_angle: FloatProperty(
         name="Angle d'adoucissement (degrés)",
         description=(
@@ -3287,6 +3449,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 export_spaces=self.export_spaces, hide_spaces=self.hide_spaces,
                 space_inset_mm=self.space_inset, space_area_in_name=self.space_area_in_name,
                 paint_back=self.paint_back, level_scenes=self.level_scenes, room_labels=self.room_labels,
+                soften_coplanar=self.soften_coplanar,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -3299,6 +3462,12 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         )
         if s.get("scenes"):
             self.report({"INFO"}, f"{len(s['scenes'])} scène(s) : " + ", ".join(s["scenes"]))
+        if s.get("edges_softened_coplanar"):
+            self.report(
+                {"INFO"},
+                f"{s['edges_softened_coplanar']} arête(s) adoucie(s) entre faces presque coplanaires "
+                f"(moins de {_SOFT_COPLANAR_DEG:g} degré)",
+            )
         if s.get("objects_softened"):
             self.report(
                 {"INFO"},

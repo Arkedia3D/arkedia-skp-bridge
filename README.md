@@ -63,7 +63,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.3.0.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.3.1.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -113,6 +113,7 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Scènes par niveau | Avec « Niveau IFC » : « Vue d'ensemble », puis pour chaque niveau une vue « 3D » en maison de poupée (niveaux supérieurs, plafonds et toiture masqués) et une vue « Plan » de dessus avec ses pièces et leurs noms, par exemple « 3D - 1er étage » et « Plan - 1er étage » (actif) |
 | Matière au verso des faces | Le verso de chaque face prend la matière du recto. Sans cela, SketchUp montre sa couleur de face arrière, un bleu-violet, au travers des vitrages et des pièces translucides (actif) |
 | Fusionner les triangles coplanaires | Une face SketchUp par surface plane, trous compris. Une surface texturée est fusionnée quand sa texture se déroule d'un seul tenant (actif) |
+| Adoucir les arêtes presque coplanaires | Arête douce et lisse entre deux faces voisines de même matériau à moins de 1 degré l'une de l'autre, quel que soit le nombre de faces : un mur de biais ou une face recalculée par l'IFC ne montre plus de traits parasites. Les arêtes réelles restent visibles (actif) |
 | Adoucir les maillages denses | Arêtes douces entre faces voisines pour les objets de 2 000 faces et plus (terrain, maillage de scan). Sans elles, SketchUp trace chaque arête et le maillage paraît noir (actif) |
 | Angle d'adoucissement | 35 degrés par défaut. À relever (50 à 60) si un maillage bruité garde des arêtes noires parsemées |
 | Unités dans SketchUp | Comme la scène Blender (défaut), mètres, centimètres, millimètres ou pouces. Surfaces en m² |
@@ -267,6 +268,9 @@ par script. Les sept scènes de la villa et les trois de l'appartement masquent 
 pièces ne paraissent que dans les scènes « Plan » (11, 10 et 6 pour les trois niveaux de la villa), et aucune face
 visible n'a de verso sans matière : avec la couleur des faces arrière passée en magenta, la vue d'ouverture reste
 identique, sans une tache.
+
+Avec la 0.3.1, les traits parasites entre faces presque coplanaires disparaissent des murs : 33 sur un
+appartement et 7 sur un autre avant, aucun après, comptés par script dans SketchUp 2027 sur les mêmes modèles.
 
 ## Les essais
 
