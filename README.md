@@ -65,7 +65,7 @@ dans Préférences > Système > Réseau). « Arkedia SKP Bridge » apparaît e
 
 ### Par le fichier zip
 
-Télécharger `arkedia_skp_bridge-0.3.2.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
+Télécharger `arkedia_skp_bridge-0.3.3.zip` sur la [page du projet](https://arkedia3d.github.io/arkedia-skp-bridge/#installation)
 ou dans les [Releases](../../releases) de ce dépôt, puis dans
 Préférences > Obtenir des extensions, ouvrir le menu déroulant en haut à droite et choisir « Install from Disk »
 (Blender ne traduit pas ce libellé). On peut aussi faire glisser le zip sur la fenêtre de Blender. Ce chemin ne
@@ -111,7 +111,8 @@ Fichier > Exporter > SketchUp Arkedia (.skp). Sans sélection, toute la scène v
 | Étiquette des pièces masquée à l'ouverture | Les pièces sont dans le fichier, leur étiquette est décochée ; un clic dans SketchUp les affiche (actif) |
 | Retrait des pièces (mm) | Rentre les faces de chaque pièce de cette distance, 5 mm par défaut. Sans retrait, elles tombent sur les sols, les plafonds et les murs, et SketchUp les fait scintiller (moirage). 0 : volumes exacts |
 | Surface dans le nom des pièces | Ajoute au nom la surface de l'IFC (NetFloorArea), mesurée avant le retrait : « Pièce 01 Chambre, 28,38 m² » (actif) |
-| Noms des pièces en texte | Un texte SketchUp dans chaque pièce, son nom et sa surface sur deux lignes, au point le plus éloigné des murs. Il suit l'étiquette de la pièce et se lit dans les scènes « Plan » (actif) |
+| Noms des pièces | Le nom et la surface de chaque pièce, sur deux lignes, au cœur de la pièce. Ils suivent l'étiquette de la pièce et se lisent dans les scènes « Plan » (actif) |
+| Noms dessinés dans la pièce | Depuis la 0.3.3 : les noms sont dessinés en lettres planes (DM Sans), un groupe « Nom de pièce - <nom> » par pièce, capitales de 15 cm (3 mm au 1/50). Le bloc se centre dans la pièce, hors des sanitaires, meubles, parois vitrées, cloisons et escaliers quand la place le permet ; faute de place il passe sur deux lignes, tourne d'un quart de tour ou rapetisse. Décochée : un texte SketchUp, de taille fixe à l'écran (actif) |
 | Scènes par niveau | Avec « Niveau IFC » : « Vue d'ensemble », puis pour chaque niveau une vue « 3D » en maison de poupée (niveaux supérieurs, plafonds et toiture masqués) et une vue « Plan » de dessus avec ses pièces et leurs noms, par exemple « 3D - 1er étage » et « Plan - 1er étage » (actif) |
 | Plan coupé dans les scènes « Plan » | Un plan de section horizontal par niveau, à la hauteur de coupe au-dessus du sol fini, actif dans la seule scène « Plan » du niveau : murs, baies et équipements tranchés, traits de coupe noirs. Les plans de section sont sur l'étiquette « Plans de coupe », masquée ; les noms des pièces passent 10 cm sous la coupe (actif) |
 | Hauteur de coupe (m) | 1,30 m par défaut : au-dessus des allèges, sous les linteaux |
@@ -284,6 +285,10 @@ coupe noirs et noms des pièces lisibles, alors que les vues 3D restent entière
 le nord dans le modèle et dans chaque scène ; la direction du soleil qu'il en tire s'écarte de 0,02° d'un calcul
 indépendant (formules de la NOAA).
 
+Avec la 0.3.3, les noms des pièces sont dessinés au cœur de chaque pièce, à côté des sanitaires, parois vitrées et
+meubles quand la place le permet : sur ces deux modèles, aucun ne touche un mur ni ne sort de sa pièce, alors que les
+textes d'écran de la 0.3.2 coupaient les cloisons des petites salles d'eau.
+
 ## Les essais
 
 Les scripts sont dans [`tests/`](tests/) et tournent sans interface, avec un profil Blender jetable pour ne pas
@@ -314,10 +319,12 @@ python tests\summarize.py resultats
 - La position du site n'est écrite que si l'IFC la donne (RefLatitude et RefLongitude de l'IfcSite). Le modèle
   n'est pas « géolocalisé » au sens de SketchUp (pas de carte ni de terrain importés) : seules les ombres en
   dépendent.
-- Les noms des pièces sont des textes SketchUp à taille d'écran : lisibles à tout zoom, ils commencent au point
-  choisi dans la pièce et peuvent se chevaucher dans les petites pièces voisines. Avec le plan coupé, ils sont posés
-  10 cm sous la coupe ; sans lui, au-dessus de ce que porte le niveau, si bien qu'en vue 3D, pièces affichées, ils
-  flottent au-dessus des murs.
+- Les noms des pièces dessinés sont de la géométrie : pour en changer un, il faut modifier la pièce dans l'IFC et
+  réexporter, ou redessiner le nom dans SketchUp. La police couvre le latin et ses accents ; un autre caractère est
+  remplacé par sa lettre de base, ou par « ? ». Dans une pièce encombrée, le nom peut passer par-dessus un équipement.
+  Avec le plan coupé, les noms sont posés 10 cm sous la coupe ; sans lui, au-dessus de ce que porte le niveau, si
+  bien qu'en vue 3D, pièces affichées, ils flottent au-dessus des murs. Le texte SketchUp, en option, garde sa taille
+  d'écran et peut chevaucher les murs des petites pièces.
 - Les nuages de points, volumes, crayons gras et cheveux ne s'exportent pas. Les courbes, textes, surfaces NURBS
   et métaballes sont exportés sous forme de maillage évalué.
 - L'import de très gros fichiers coûte de la mémoire (voir plus haut), et supprimer ensuite des centaines de
@@ -343,7 +350,9 @@ code : OpenSKP Import/Export (instanciation réelle des composants, calques, ar
 RedHaloStudio (noms de matériaux, conversion sRGB, hiérarchie, scènes). Les fusions de faces s'appuient sur
 [shapely](https://github.com/shapely/shapely) et [mapbox_earcut](https://github.com/skogler/mapbox_earcut_python),
 la lecture XML sur [defusedxml](https://github.com/tiran/defusedxml). Leurs licences sont dans les roues du dossier
-`arkedia_skp_bridge/wheels/`.
+`arkedia_skp_bridge/wheels/`. Les noms des pièces sont dessinés avec les contours de la police
+[DM Sans](https://github.com/googlefonts/dm-fonts) (The DM Sans Project Authors, SIL Open Font License 1.1, texte
+dans `arkedia_skp_bridge/OFL_DMSans.txt`).
 
 Arkedia SKP Bridge est distribué sous licence GPL-3.0 ou ultérieure (voir [`LICENSE`](LICENSE)). SketchUp est une
 marque de Trimble Inc. Ce projet n'est ni affilié à Trimble ni approuvé par elle.

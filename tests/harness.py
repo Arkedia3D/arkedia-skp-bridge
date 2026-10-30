@@ -602,14 +602,15 @@ def build_pieces(param):
             "export_kw": {"export_spaces": True, "hide_spaces": True}}
 
 
-def build_niveaux(param):
+def build_niveaux(param, texte=False):
     """Deux niveaux façon Bonsai (collections « IfcBuildingStorey/… », sans IFC chargé) : dalle, quatre murs, une
     vitre translucide et une pièce masquée par niveau. Export par niveau avec les pièces : verso de chaque face
     peint de sa matière, une étiquette par niveau et par niveau de pièces, cinq scènes qui masquent les bonnes
-    étiquettes, le nom et la surface de chaque pièce en texte. Depuis la 0.3.2 : un plan de section par niveau à
-    1,30 m au-dessus du sol (bas médian des objets du niveau, faute d'IFC), sur l'étiquette « Plans de coupe »
-    masquée dans toutes les scènes, actif dans la seule scène « Plan » du niveau, et les noms des pièces 10 cm
-    sous la coupe."""
+    étiquettes, le nom et la surface de chaque pièce. Depuis la 0.3.2 : un plan de section par niveau à 1,30 m
+    au-dessus du sol (bas médian des objets du niveau, faute d'IFC), sur l'étiquette « Plans de coupe » masquée dans
+    toutes les scènes, actif dans la seule scène « Plan » du niveau, et les noms des pièces 10 cm sous la coupe.
+    Depuis la 0.3.3 : noms dessinés en lettres planes, un groupe « Nom de pièce - <nom> » par pièce sur l'étiquette
+    des pièces de son niveau, centré dans la pièce ; avec `texte` (cas « niveaux_texte »), l'ancien texte SketchUp."""
     from shapely.geometry import Polygon
     ms = mats(2)
     verre = bpy.data.materials.new("Vitrage")
@@ -645,6 +646,8 @@ def build_niveaux(param):
         textes.append(code + "\n" + A._fr_area(60.0))
     p_r, p_e, pc = "Pièces - Rez-de-chaussée", "Pièces - 1er étage", "Plans de coupe"
     attendu = {
+        "noms_3d": {} if texte else {"Nom de pièce - R01": {"z_m": 1.2, "etiquette": p_r, "centre_m": [5.0, 3.0]},
+                                     "Nom de pièce - E01": {"z_m": 4.4, "etiquette": p_e, "centre_m": [5.0, 3.0]}},
         "scenes": ["Vue d'ensemble", "3D - Rez-de-chaussée", "3D - 1er étage", "Plan - Rez-de-chaussée",
                    "Plan - 1er étage"],
         "masquees": {
@@ -655,14 +658,15 @@ def build_niveaux(param):
             "Plan - 1er étage": [p_r, "Rez-de-chaussée", pc],
         },
         "etiquettes": sorted(["Rez-de-chaussée", "1er étage", p_r, p_e, pc]),
-        "textes": sorted(textes),
+        "textes": sorted(textes) if texte else [],
         "coupes": {"Vue d'ensemble": 0, "3D - Rez-de-chaussée": 0, "3D - 1er étage": 0,
                    "Plan - Rez-de-chaussée": 1, "Plan - 1er étage": 1},
         "plans_z_m": [1.3, 4.5],
-        "textes_z_m": {"E01": 4.4, "R01": 1.2},
+        "textes_z_m": {"E01": 4.4, "R01": 1.2} if texte else {},
     }
     return {"niveaux_attendus": attendu,
-            "export_kw": {"layer_mode": "IFC_STOREY", "export_spaces": True, "hide_spaces": True}}
+            "export_kw": {"layer_mode": "IFC_STOREY", "export_spaces": True, "hide_spaces": True,
+                          "room_labels_3d": not texte}}
 
 
 def build_presqueplan(param):
@@ -697,6 +701,7 @@ BUILD = {
     "transforms": build_transforms, "mm": build_mm, "modifiers": build_modifiers,
     "texture": build_texture, "unicode": build_unicode, "mod": build_mod, "collinst": build_collinst,
     "pieces": build_pieces, "niveaux": build_niveaux, "presqueplan": build_presqueplan,
+    "niveaux_texte": lambda param: build_niveaux(param, texte=True),
 }
 
 
@@ -800,17 +805,49 @@ def page_sections(path):
     saved = legacy._read_page_record
     legacy._read_page_record = ns["_read_page_record"]
     try:
-        d = legacy.full_parse_legacy(path)
+        with A._layer_list_guard():
+            d = legacy.full_parse_legacy(path)
     finally:
         legacy._read_page_record = saved
     return {p.get("name"): len(p.get("ark_sections") or []) for p in d.get("pages") or []}
 
 
+def label_groups(m):
+    """Groupes « Nom de pièce - … » de la racine (0.3.3) : altitude, étiquette, centre et taille de la boîte des
+    lettres vue de dessus (m), nombre de faces, matières des deux côtés, arêtes visibles, normales."""
+    nom = {i: mt.name for i, mt in m.materials_by_id.items()}
+    out = {}
+    for inst in m.root.instances:
+        if not inst.name.startswith("Nom de pièce - "):
+            continue
+        d = m.definitions.get(inst.ref_idx)
+        if d is None:
+            continue
+        t = [v * inst.matrix[12] for v in inst.matrix[9:12]]  # openskp : 3 x 3, translation, échelle
+        xs = [v.x for v in d.vertices.values()]
+        ys = [v.y for v in d.vertices.values()]
+        zs = {round(v.z, 4) for v in d.vertices.values()}
+        out[inst.name] = {
+            "z_m": round(t[2] * 0.0254, 3), "etiquette": inst.layer, "faces": len(d.faces),
+            "centre_m": [round((t[0] + (min(xs) + max(xs)) / 2) * 0.0254, 3),
+                         round((t[1] + (min(ys) + max(ys)) / 2) * 0.0254, 3)],
+            "taille_m": [round((max(xs) - min(xs)) * 0.0254, 3), round((max(ys) - min(ys)) * 0.0254, 3)],
+            "plat": zs == {0.0},
+            "matieres": sorted({str(nom.get(f.material_id)) for f in d.faces.values()}
+                               | {str(nom.get(f.back_material_id)) for f in d.faces.values()}),
+            "aretes_visibles": sum(1 for e in d.edges.values() if not e.hidden),
+            "vers_le_haut": all(f.normal is None or f.normal[2] > 0.999 for f in d.faces.values()),
+        }
+    return out
+
+
 def check_niveaux(path, attendu):
     """Relit le .skp avec openskp : scènes et étiquettes qu'elles masquent, étiquettes, textes, verso des faces,
-    plans de section (altitude, scènes qui les activent) et hauteur des noms des pièces."""
+    plans de section (altitude, scènes qui les activent), hauteur des noms des pièces et, depuis la 0.3.3, leurs
+    groupes de lettres (altitude, étiquette, centre, faces horizontales tournées vers le haut, arêtes masquées)."""
     import openskp
-    m = openskp.SkpFile.open(path).parse()
+    with A._layer_list_guard():  # 0.3.3 : 16 définitions et l'étiquette par défaut au numéro 16
+        m = openskp.SkpFile.open(path).parse()
     defs = list(m.definitions.values()) + [m.root]
     nom = {i: mt.name for i, mt in m.materials_by_id.items()}
     faces = [f for d in defs for f in d.faces.values()]
@@ -827,7 +864,14 @@ def check_niveaux(path, attendu):
         "coupes": page_sections(path),
         "textes_z_m": {t.text.split("\n")[0]: round(t.point[2] * 0.0254, 3) for d in defs for t in d.texts
                        if t.point is not None},
+        "noms_3d": label_groups(m),
     }
+    noms_ok = set(out["noms_3d"]) == set(attendu.get("noms_3d", {}))
+    for k, v in attendu.get("noms_3d", {}).items():
+        g = out["noms_3d"].get(k)
+        noms_ok = noms_ok and g is not None and abs(g["z_m"] - v["z_m"]) < 0.005 and g["etiquette"] == v["etiquette"] \
+            and all(abs(a - b) < 0.05 for a, b in zip(g["centre_m"], v["centre_m"])) and g["faces"] > 0 \
+            and g["plat"] and g["vers_le_haut"] and g["aretes_visibles"] == 0 and g["matieres"] == ["Nom de pièce"]
     out["ok"] = bool(
         out["scenes"] == attendu["scenes"]
         and all(out["masquees"].get(k) == sorted(v) for k, v in attendu["masquees"].items())
@@ -838,7 +882,8 @@ def check_niveaux(path, attendu):
         and all(abs(a - b) < 0.005 for a, b in zip(out["plans_z_m"], attendu["plans_z_m"]))
         and out["coupes"] == attendu["coupes"]
         and set(out["textes_z_m"]) == set(attendu["textes_z_m"])
-        and all(abs(out["textes_z_m"][k] - v) < 0.005 for k, v in attendu["textes_z_m"].items()))
+        and all(abs(out["textes_z_m"][k] - v) < 0.005 for k, v in attendu["textes_z_m"].items())
+        and noms_ok)
     return out
 
 

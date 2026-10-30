@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "arkedia_skp_bridge"
-version = "0.3.2"
+version = "0.3.3"
 name = "Arkedia SKP Bridge"
 tagline = "Import/export SketchUp (.skp) pour le flux scan vers CAO/BIM"
 maintainer = "ARKEDIA 3D <contact@arkedia3d.ci>"
@@ -14,7 +14,9 @@ blender_version_min = "5.1.0"
 
 license = [
   "SPDX:GPL-3.0-or-later",
+  "SPDX:OFL-1.1",
 ]
+# OFL-1.1 : glyphes_dmsans.json, contours des lettres de DM Sans Medium (noms des pièces dessinés), voir OFL_DMSans.txt
 
 # Les roues compilées (shapely, mapbox_earcut) sont celles de Windows 64 bits pour Python 3.13,
 # la version embarquée dans Blender 5.1 et 5.2 (testé sur 5.2.3 LTS). Autre système : voir le README.

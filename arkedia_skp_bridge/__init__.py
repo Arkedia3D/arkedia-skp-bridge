@@ -33,6 +33,7 @@ import os
 import struct
 import tempfile
 import time
+import unicodedata
 
 import bpy
 import mathutils
@@ -650,9 +651,9 @@ def _import_skp_impl(filepath, context, keep_hierarchy, import_scenes, store_att
         _check_import_memory(filepath)
     uf = _unit_factor(context)
     skp = openskp.SkpFile.open(filepath)
-    with _legacy_scenes_reader():
+    with _legacy_scenes_reader(), _layer_list_guard():
         model = skp.parse()
-    scene = _instanced_scene(skp)
+        scene = _instanced_scene(skp)  # sa relecture de secours passe aussi par les correctifs
     skp._parsed = None  # la lecture brute n'est plus utile : c'est la plus grosse part de la mémoire
     progress(0.1)  # la lecture du fichier (la moitié du temps pour un gros modèle) ne donne pas de détail
 
@@ -1901,6 +1902,56 @@ class _legacy_scenes_reader:
         return False
 
 
+# Fin de la liste des étiquettes, à l'import. Après la dernière étiquette viennent l'étiquette active (numéro d'objet sur
+# 2 octets) puis le nombre de définitions (4 octets). openskp prend ces deux premiers octets pour une étiquette
+# « parent » (gabarit de la version 18 : parent, active, nombre) dès que les deux nombres de 2 octets qui suivent
+# désignent des étiquettes, et lit alors le nombre de définitions deux octets trop loin : le fichier ne s'ouvre pas.
+# Cela arrive quand le nombre de définitions est égal au numéro d'objet d'une étiquette (16 groupes, et l'étiquette par
+# défaut au numéro 16 : cas relevé le 30 octobre 2026 sur le cas d'essai « niveaux »). Le temps d'un import, ce saut est
+# annulé quand la lecture sans saut tombe juste, c'est-à-dire sur un nombre de définitions suivi d'une définition.
+class _layer_list_guard:
+    """Le temps d'un import, garde-fou sur la lecture de la fin de la liste des étiquettes (voir ci-dessus). Rien
+    n'est modifié si openskp ne ressemble pas à la version attendue."""
+
+    def __enter__(self):
+        import importlib
+
+        self._saved = None
+        try:
+            mod = importlib.import_module("openskp.legacy")
+            arch = getattr(mod, "_Archive", None)
+            orig = getattr(arch, "_skip_clayer_parent_ref", None)
+            starts = getattr(mod, "_definition_starts_at", None)
+            if orig is None or starts is None or getattr(orig, "_ark_guard", False):
+                return self
+
+            def skip(ar, r, self_slot):
+                pos = r.pos
+                orig(ar, r, self_slot)
+                if r.pos != pos + 2:
+                    return
+                try:
+                    n = int.from_bytes(ar.data[pos + 2:pos + 6], "little")
+                    if 0 < n <= 1_000_000 and starts(ar, pos + 6):
+                        r.pos = pos
+                except Exception:
+                    pass
+
+            skip._ark_guard = True
+            arch._skip_clayer_parent_ref = skip
+            self._saved = (arch, orig)
+        except Exception:
+            self._saved = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._saved is not None:
+            arch, orig = self._saved
+            arch._skip_clayer_parent_ref = orig
+            self._saved = None
+        return False
+
+
 def _drop_collinear(ring, flags):
     """Retire d'un contour les sommets alignés qui n'appartiennent qu'à la région fusionnée."""
     import numpy as np
@@ -2700,13 +2751,11 @@ def _room_text(obj, info, area_m2):
     return f"{name}\n{_fr_area(area_m2)}" if area_m2 else str(name)
 
 
-def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None, z_world=None):
-    """Point (repère de l'objet, unités Blender) où poser le nom d'une pièce : pôle d'inaccessibilité de l'emprise
-    de ses faces tournées vers le bas (le point le plus loin des bords, toujours dans la pièce, même en L), à
-    `lift_bu` au-dessus du haut de la pièce et au moins à `z_min_world` (hauteur des murs du niveau) : SketchUp cache
-    la partie d'un texte qui passe sous une face, et vu de dessus un nom plus large qu'une petite pièce déborde sur
-    les murs. `z_world`, s'il est donné, impose l'altitude (sous la coupe des scènes « Plan »). None si le volume
-    n'a pas de sol exploitable."""
+def _room_floor(mesh, matrix_world):
+    """Emprise au sol d'une pièce dans le plan XY du monde (unités Blender) : réunion de ses faces tournées vers le bas,
+    sa plus grande partie si elle est en morceaux. Renvoie (emprise shapely, ou None si shapely n'a pas pu la
+    construire ; points de ces faces (n, 2) ; z du bas et z du haut du volume), ou None si le volume n'a aucune face
+    tournée vers le bas."""
     import numpy as np
 
     A = _mesh_arrays(mesh)
@@ -2725,36 +2774,381 @@ def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None, z_world=No
     down = np.nonzero((N[:, 2] < 0) & (np.abs(N[:, 2]) > 0.94 * np.maximum(lens, 1e-30)))[0]
     if not len(down):
         return None
+    pts = np.concatenate([co[lv[ls[p]:ls[p] + lt[p]], :2] for p in down.tolist()])
+    floor = None
     try:
         from shapely.geometry import Polygon
-        from shapely.ops import polylabel, unary_union
+        from shapely.ops import unary_union
 
         parts = []
         for p in down.tolist():
-            ring = co[lv[ls[p]:ls[p] + lt[p]], :2]
-            poly = Polygon(ring)
+            poly = Polygon(co[lv[ls[p]:ls[p] + lt[p]], :2])
             if not poly.is_valid:
                 poly = poly.buffer(0)
             if not poly.is_empty and poly.area > 0:
                 parts.append(poly)
         floor = unary_union(parts) if parts else None
-        if floor is None or floor.is_empty:
-            return None
-        if floor.geom_type != "Polygon":
+        if floor is not None and not floor.is_empty and floor.geom_type != "Polygon":
             floor = max(getattr(floor, "geoms", [floor]), key=lambda g: g.area)
-        pt = polylabel(floor, tolerance=max(1e-6, 0.01 * math.sqrt(floor.area)))
-        x, y = float(pt.x), float(pt.y)
+        if floor is None or floor.is_empty or floor.geom_type != "Polygon":
+            floor = None
     except Exception:
-        pts = np.concatenate([co[lv[ls[p]:ls[p] + lt[p]], :2] for p in down.tolist()])
-        x, y = (float(v) for v in pts.mean(axis=0))
-    z = float(co[:, 2].max()) + lift_bu
+        floor = None
+    return floor, pts, float(co[:, 2].min()), float(co[:, 2].max())
+
+
+def _label_target(floor):
+    """Point où centrer le nom d'une pièce : son centre de gravité s'il est dans la pièce et presque aussi loin des murs
+    que le pôle d'inaccessibilité (le point le plus éloigné des bords, toujours dans la pièce, même en L), sinon ce
+    pôle. Dans un couloir, le pôle tombe n'importe où sur l'axe ; le centre de gravité, au milieu."""
+    from shapely.ops import polylabel
+
+    pole = polylabel(floor, tolerance=max(1e-6, 0.01 * math.sqrt(floor.area)))
+    c = floor.centroid
+    try:
+        if floor.contains(c) and floor.boundary.distance(c) >= 0.8 * floor.boundary.distance(pole):
+            return float(c.x), float(c.y)
+    except Exception:
+        pass
+    return float(pole.x), float(pole.y)
+
+
+def _room_label_site(mesh, matrix_world, lift_bu, z_min_world=None, z_world=None):
+    """Où poser le nom d'une pièce, dans le repère du monde (unités Blender) : (x, y, z, emprise, z du sol). (x, y) au
+    cœur de l'emprise de ses faces tournées vers le bas (`_label_target`) ; z à `lift_bu` au-dessus du haut de la
+    pièce et au moins à `z_min_world` (hauteur des murs du niveau) : SketchUp cache ce qui passe sous une face, et vu
+    de dessus un nom posé plus bas disparaîtrait sous les meubles hauts. `z_world`, s'il est donné, impose l'altitude
+    (sous la coupe des scènes « Plan »). emprise : polygone shapely, ou None si shapely n'a pas pu la construire.
+    None si le volume n'a pas de sol exploitable."""
+    r = _room_floor(mesh, matrix_world)
+    if r is None:
+        return None
+    floor, pts, bottom, top = r
+    xy = None
+    if floor is not None:
+        try:
+            xy = _label_target(floor)
+        except Exception:
+            floor = None
+    x, y = xy if xy is not None else (float(v) for v in pts.mean(axis=0))
+    z = top + lift_bu
     if z_min_world is not None and math.isfinite(z_min_world):
         z = max(z, float(z_min_world))
     if z_world is not None and math.isfinite(z_world):
         z = float(z_world)
-    world = np.array([x, y, z, 1.0])
-    local = np.linalg.solve(M, world)
+    return float(x), float(y), float(z), floor, bottom
+
+
+def _site_local(matrix_world, site):
+    """Point (x, y, z) du monde ramené dans le repère de l'objet."""
+    import numpy as np
+
+    local = np.linalg.solve(np.array(matrix_world, dtype=np.float64), np.array([site[0], site[1], site[2], 1.0]))
     return tuple(float(v) for v in local[:3])
+
+
+def _room_label_anchor(mesh, matrix_world, lift_bu, z_min_world=None, z_world=None):
+    """Point d'ancrage (repère de l'objet, unités Blender) du nom d'une pièce écrit en texte SketchUp, voir
+    `_room_label_site`. None si le volume n'a pas de sol exploitable."""
+    site = _room_label_site(mesh, matrix_world, lift_bu, z_min_world, z_world)
+    return None if site is None else _site_local(matrix_world, site)
+
+
+# --- noms des pièces dessinés à plat -------------------------------------------------------------------------------
+#
+# Un texte SketchUp se dessine à l'écran : sa taille ne suit pas le zoom, il part vers la droite de son point d'ancrage
+# (première ligne centrée en hauteur sur ce point) et, vu de dessus, déborde sur les murs d'une petite pièce. Le nom de
+# chaque pièce est donc dessiné en faces planes, horizontales, dans un groupe « Nom de pièce - <nom> » posé sur
+# l'étiquette des pièces de son niveau : lettres de DM Sans Medium (SIL Open Font License 1.1, contours aplatis dans
+# glyphes_dmsans.json), nom au-dessus, surface en dessous, centrés dans la pièce. Le bloc se pose au cœur de la pièce
+# s'il y tient, sinon au point le plus proche où il tient, hors de ce qui se voit dans la pièce vue de dessus
+# (sanitaires et bacs de douche, mobilier, parois vitrées, cloisons, escaliers, poteaux) quand la place le permet,
+# quitte à passer sur deux lignes, à tourner d'un quart de tour (couloir) ou à rapetisser jusqu'à 70 %. Sinon, il passe
+# par-dessus les équipements, réduit au besoin jusqu'à 60 %.
+_LABEL_FONT_FILE = "glyphes_dmsans.json"
+_LABEL_NAME_EM_M = 0.22        # cadratin du nom : capitales de 15 cm, 3 mm sur un plan au 1/50
+_LABEL_AREA_EM_M = 0.16        # cadratin de la surface
+_LABEL_LEADING = 1.15          # d'une ligne de base à la suivante, en cadratins du nom
+_LABEL_MARGIN_M = 0.06         # jeu entre le bloc et les murs
+_LABEL_OBSTACLE_GAP_M = 0.04   # jeu entre le bloc et un équipement
+_LABEL_GRID_POINTS = 4000      # positions essayées au plus par tentative
+_LABEL_RGB = (26, 35, 50)
+_LABEL_MATERIAL = "Nom de pièce"
+_LABEL_GROUP_PREFIX = "Nom de pièce - "
+_LABEL_OBSTACLE_CLASSES = frozenset((
+    "IfcFurniture", "IfcFurnishingElement", "IfcSystemFurnitureElement", "IfcSanitaryTerminal", "IfcFlowTerminal",
+    "IfcWasteTerminal", "IfcElectricAppliance", "IfcStair", "IfcStairFlight", "IfcRamp", "IfcRampFlight", "IfcColumn",
+    "IfcRailing", "IfcTransportElement", "IfcBuildingElementProxy", "IfcPlate", "IfcMember", "IfcWall",
+    "IfcWallStandardCase", "IfcWallElementedCase", "IfcCurtainWall", "IfcDoor", "IfcWindow",
+))
+# (échelle, quart de tour, nom sur deux lignes, en évitant les équipements) dans l'ordre d'essai
+_LABEL_TRIES = (
+    [(s, rot, wrap, True) for s in (1.0, 0.85) for rot in (False, True) for wrap in (False, True)]
+    + [(0.7, rot, wrap, True) for rot in (False, True) for wrap in (False, True)]
+    + [(s, rot, wrap, False) for s in (1.0, 0.85, 0.7, 0.6) for rot in (False, True) for wrap in (False, True)]
+)
+_LABEL_FONT_DATA = None
+_LABEL_SPACES = {"\u00a0": 1.0, "\u2007": 1.0, "\u202f": 0.6, "\u2009": 0.6, "\t": 1.0}
+
+
+def _label_font():
+    """Contours des glyphes (lus une fois) : {"upm", "glyphes": {caractère: [avance, polygones]}}."""
+    global _LABEL_FONT_DATA
+    if _LABEL_FONT_DATA is None:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), _LABEL_FONT_FILE), encoding="utf-8") as f:
+            _LABEL_FONT_DATA = json.load(f)
+    return _LABEL_FONT_DATA
+
+
+def _label_glyph(font, ch):
+    """[avance, polygones] d'un caractère : espaces insécables comme l'espace (fine : 60 %), lettre accentuée absente
+    ramenée à sa lettre de base, caractère inconnu remplacé par « ? »."""
+    g = font["glyphes"]
+    if ch in g:
+        return g[ch]
+    space = g.get(" ", [250, []])
+    if ch in _LABEL_SPACES:
+        return [space[0] * _LABEL_SPACES[ch], []]
+    base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    if base[:1] in g:
+        return g[base[:1]]
+    return g.get("?", space)
+
+
+def _label_width(font, text, em):
+    k = em / font["upm"]
+    return sum(_label_glyph(font, ch)[0] for ch in text) * k
+
+
+def _label_line(font, text, em, x0, y0):
+    """Polygones shapely d'une ligne, ligne de base en y0, départ en x0 (unités de `em`)."""
+    from shapely.geometry import Polygon
+
+    k = em / font["upm"]
+    x, out = x0, []
+    for ch in text:
+        adv, shapes = _label_glyph(font, ch)
+        for rings in shapes:
+            pts = [[(x + r[i] * k, y0 + r[i + 1] * k) for i in range(0, len(r), 2)] for r in rings]
+            if len(pts[0]) >= 3:
+                out.append(Polygon(pts[0], [h for h in pts[1:] if len(h) >= 3]))
+        x += adv * k
+    return out
+
+
+def _label_wrap(font, name, em):
+    """Nom coupé en deux lignes à l'espace qui équilibre le mieux leur largeur ; None s'il n'a pas d'espace."""
+    words = name.split()
+    if len(words) < 2:
+        return None
+    best = None
+    for i in range(1, len(words)):
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        w = max(_label_width(font, a, em), _label_width(font, b, em))
+        if best is None or w < best[0]:
+            best = (w, [a, b])
+    return best[1]
+
+
+def _label_block(font, name_lines, area_text, name_em, area_em, grid):
+    """Bloc de texte centré sur l'origine (centre de sa boîte) : (géométrie shapely, largeur, hauteur). Lignes du nom
+    puis surface, chacune centrée ; coordonnées calées sur une grille de `grid`."""
+    import shapely
+    from shapely import affinity
+    from shapely.ops import unary_union
+
+    lines = [(t, name_em) for t in name_lines] + ([(area_text, area_em)] if area_text else [])
+    polys, y = [], 0.0
+    for i, (text, em) in enumerate(lines):
+        if i:
+            y -= _LABEL_LEADING * name_em
+        polys += _label_line(font, text, em, -_label_width(font, text, em) / 2.0, y)
+    if not polys:
+        return None
+    geom = unary_union([p if p.is_valid else p.buffer(0) for p in polys])
+    if grid > 0:
+        geom = shapely.set_precision(geom, grid)
+    if geom.is_empty:
+        return None
+    minx, miny, maxx, maxy = geom.bounds
+    geom = affinity.translate(geom, -(minx + maxx) / 2.0, -(miny + maxy) / 2.0)
+    return geom, maxx - minx, maxy - miny
+
+
+def _label_spot(floor, pole, w, h, margin, obstacles=None):
+    """Centre d'un rectangle w x h (plus la marge) entièrement dans l'emprise `floor` et, si `obstacles` est donné,
+    sans le toucher : le pôle s'il convient, sinon la position la plus proche du pôle sur une grille. None si aucune."""
+    import numpy as np
+    import shapely
+
+    hw, hh = w / 2.0 + margin, h / 2.0 + margin
+    minx, miny, maxx, maxy = floor.bounds
+    if maxx - minx < 2 * hw or maxy - miny < 2 * hh:
+        return None
+
+    def fits(xs, ys):
+        boxes = shapely.box(xs - hw, ys - hh, xs + hw, ys + hh)
+        good = shapely.contains(floor, boxes)
+        if obstacles is not None:
+            good &= ~shapely.intersects(obstacles, boxes)
+        return good
+
+    px, py = float(pole[0]), float(pole[1])
+    if fits(np.array([px]), np.array([py]))[0]:
+        return px, py
+    x0, x1, y0, y1 = minx + hw, maxx - hw, miny + hh, maxy - hh
+    step = max(math.sqrt(max((x1 - x0) * (y1 - y0), 1e-12) / _LABEL_GRID_POINTS), 1e-9)
+    xs = np.arange(x0, x1 + step * 0.5, step)
+    ys = np.arange(y0, y1 + step * 0.5, step)
+    gx, gy = np.meshgrid(xs, ys)
+    gx, gy = gx.ravel(), gy.ravel()
+    good = fits(gx, gy)
+    if not good.any():
+        return None
+    d = (gx - px) ** 2 + (gy - py) ** 2
+    d[~good] = np.inf
+    i = int(np.argmin(d))
+    return float(gx[i]), float(gy[i])
+
+
+def _label_layout(name, area_text, floor, pole, uf, obstacles=None):
+    """Nom d'une pièce mis en page dans son emprise (plan XY, unités Blender ; `uf` unités par mètre). Renvoie
+    (géométrie shapely placée, infos) ; infos : échelle, quart de tour, deux lignes, équipements évités, débord."""
+    import shapely
+    from shapely import affinity
+
+    font = _label_font()
+    name = " ".join(str(name).split()) or "?"
+    grid = 1e-4 * uf
+    blocks = {}
+    margin = _LABEL_MARGIN_M * uf
+    obst = None
+    if obstacles is not None and not obstacles.is_empty:
+        obst = obstacles.buffer(_LABEL_OBSTACLE_GAP_M * uf)
+        shapely.prepare(obst)
+    shapely.prepare(floor)
+
+    def block(scale, wrap):
+        key = (scale, wrap)
+        if key not in blocks:
+            lines = _label_wrap(font, name, _LABEL_NAME_EM_M * uf) if wrap else [name]
+            blocks[key] = None if lines is None else _label_block(
+                font, lines, area_text, _LABEL_NAME_EM_M * uf * scale, _LABEL_AREA_EM_M * uf * scale, grid)
+        return blocks[key]
+
+    for scale, rot, wrap, avoid in _LABEL_TRIES:
+        if avoid and obst is None:
+            continue
+        b = block(scale, wrap)
+        if b is None:
+            continue
+        geom, w, h = b
+        if rot:
+            w, h = h, w
+        spot = _label_spot(floor, pole, w, h, margin, obst if avoid else None)
+        if spot is None:
+            continue
+        if rot:
+            geom = affinity.rotate(geom, 90.0, origin=(0.0, 0.0))
+        geom = affinity.translate(geom, spot[0], spot[1])
+        return geom, {"echelle": scale, "quart_de_tour": rot, "deux_lignes": wrap, "equipements_evites": avoid,
+                      "deborde": False}
+    b = block(0.6, True) or block(0.6, False)
+    geom = affinity.translate(b[0], float(pole[0]), float(pole[1]))
+    return geom, {"echelle": 0.6, "quart_de_tour": False, "deux_lignes": block(0.6, True) is not None,
+                  "equipements_evites": False, "deborde": True}
+
+
+def _label_faces(geom, min_area):
+    """Faces d'un bloc placé : liste de (contour extérieur, trous), anneaux de points (x, y) sans répétition du
+    premier, extérieur dans le sens trigonométrique (face tournée vers le haut). Les morceaux et les trous de moins de
+    `min_area` sont écartés."""
+    from shapely.geometry import Polygon
+    from shapely.geometry.polygon import orient
+
+    parts = list(getattr(geom, "geoms", [geom]))
+    out = []
+    for p in parts:
+        if p.geom_type != "Polygon" or p.is_empty or p.area < min_area:
+            continue
+        p = orient(p, 1.0)
+        ext = list(p.exterior.coords)[:-1]
+        holes = [list(r.coords)[:-1] for r in p.interiors if Polygon(r).area >= min_area]
+        if len(ext) >= 3:
+            out.append((ext, [h for h in holes if len(h) >= 3]))
+    return out
+
+
+def _label_obstacles(pool, infos, storey_of, spaces, uf):
+    """Ce que les noms des pièces évitent (sanitaires et bacs de douche, mobilier, parois vitrées, cloisons, portes,
+    escaliers, poteaux...), par niveau : liste de (emprise au sol, z du bas, z du haut) dans le repère du monde.
+    Emprise : enveloppe convexe des sommets de l'objet vus de dessus (exacte pour un mur droit, même de biais, ou un
+    meuble rectangulaire). Les murs qui bordent la pièce ne mordent pas sur elle : le jeu des murs la tient à
+    distance."""
+    import numpy as np
+    from shapely.geometry import MultiPoint
+
+    out = {}
+    for obj in pool:
+        if obj.name in spaces or obj.type != "MESH" or obj.data is None:
+            continue
+        if (infos.get(obj.name) or {}).get("ifc_class") not in _LABEL_OBSTACLE_CLASSES:
+            continue
+        try:
+            n = len(obj.data.vertices)
+            if not n:
+                continue
+            co = np.empty(n * 3, dtype=np.float64)
+            obj.data.vertices.foreach_get("co", co)
+            co = co.reshape(-1, 3)[::max(1, n // 20000)]
+            M = np.array(obj.matrix_world, dtype=np.float64)
+            w = co @ M[:3, :3].T + M[:3, 3]
+            hull = MultiPoint(w[:, :2]).convex_hull
+            if hull.geom_type != "Polygon":
+                hull = hull.buffer(0.005 * uf)
+        except Exception:
+            continue
+        if hull.geom_type == "Polygon" and hull.area > 0:
+            out.setdefault(storey_of.get(obj.name), []).append((hull, float(w[:, 2].min()), float(w[:, 2].max())))
+    return out
+
+
+def _label_room_obstacles(entries, floor, z_floor, z_label, uf):
+    """Réunion des emprises de ce qui se voit dans une pièce vue de dessus, sous son nom : dans la pièce, pas sous son
+    sol, et dont le bas n'est pas au-dessus du nom (plus de 15 cm : au-dessus de la coupe). Un bac de douche de 2 cm
+    compte : son contour se dessine sur le plan. None s'il n'y a rien."""
+    from shapely.ops import unary_union
+
+    near = [p for p, z0, z1 in entries
+            if z0 < z_label + 0.15 * uf and z1 > z_floor - 0.05 * uf and p.intersects(floor)]
+    return unary_union(near) if near else None
+
+
+def _write_room_label(builder, geom, z, k, material, layer, name, uf, attrs=None):
+    """Écrit un nom de pièce mis en page (`_label_layout`, plan XY du monde, unités Blender) en groupe « Nom de pièce -
+    <nom> » à l'altitude z : faces horizontales tournées vers le haut, même matière des deux côtés, arêtes masquées.
+    Renvoie le nombre de faces écrites (0 : rien n'est écrit)."""
+    faces = _label_faces(geom, (1e-4 * uf) ** 2)
+    if not faces:
+        return 0
+    minx, miny, maxx, maxy = geom.bounds
+    cx, cy = (minx + maxx) / 2.0, (miny + maxy) / 2.0
+
+    def ring(points):
+        return [((x - cx) * k, (y - cy) * k, 0.0) for x, y in points]
+
+    kw = {"attributes": attrs, "attribute_dict_name": "ARKEDIA"} if attrs else {}
+    written = 0
+    with builder.add_group(_su(_LABEL_GROUP_PREFIX + name), translation=(cx * k, cy * k, z * k), layer=layer,
+                           **kw) as grp:
+        for ext, holes in faces:
+            try:
+                grp.add_face(ring(ext), material=material, back_material=material, hidden_edges=True,
+                             holes=[ring(h) for h in holes])
+                written += 1
+            except Exception:
+                continue
+    return written
 
 
 # --- unités d'affichage ------------------------------------------------------------------------------
@@ -3212,7 +3606,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                      soften_angle=_SOFTEN_ANGLE_DEG, export_spaces=False, hide_spaces=True,
                      space_inset_mm=_SPACE_INSET_MM, space_area_in_name=True, paint_back=True, level_scenes=True,
                      room_labels=True, soften_coplanar=True, geolocate=True, plan_cut=True,
-                     plan_cut_height=_CUT_HEIGHT_M):
+                     plan_cut_height=_CUT_HEIGHT_M, room_labels_3d=True):
     from openskp import create
 
     t0 = time.time()
@@ -3339,7 +3733,14 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 if mat.name in handle_by_mat:
                     name = _clean_material_name(name + " (volume)")
                 space_handle[mat.name] = builder.add_material(name, rgb, opacity=op)
-        stats["materials"] = len(handle_by_mat) + len(space_handle) + (1 if space_default is not None else 0)
+        # matière des noms de pièces dessinés : bleu nuit, opaque
+        label_mat = None
+        if room_labels and room_labels_3d and spaces:
+            used = getattr(builder, "materials_by_name", {}) or {}
+            label_mat = builder.add_material(
+                _LABEL_MATERIAL if _LABEL_MATERIAL not in used else _LABEL_MATERIAL + " (Arkedia)", _LABEL_RGB)
+        stats["materials"] = (len(handle_by_mat) + len(space_handle) + (1 if space_default is not None else 0)
+                              + (1 if label_mat is not None else 0))
         stats["spaces"] = len(spaces)
         stats["spaces_inset"] = 0
         stats["spaces_not_inset"] = []
@@ -3415,6 +3816,12 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                 if i + 1 < len(order):
                     top = min(top, bottoms[order[i + 1]] + 0.5 * uf)
                 label_z[st] = top + _ROOM_LABEL_LIFT_M * uf
+        label_obstacles = {}
+        if label_mat is not None:
+            try:
+                label_obstacles = _label_obstacles(pool, infos, storey_of, spaces, uf)
+            except Exception as exc:
+                stats["warnings"].append(f"équipements non relevés pour placer les noms des pièces : {exc}")
 
         # 3) regroupement des maillages partagés (composants)
         share = {}
@@ -3536,7 +3943,7 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                     vertex_color_objects += 1
                 name = group_name(obj)
                 out_mesh = mesh
-                label = None
+                label = label3d = None
                 if obj.name in spaces:
                     # surface exacte dans le nom (avant le retrait), puis faces rentrées contre le moirage
                     area = None
@@ -3547,19 +3954,28 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                     if space_area_in_name:
                         name = _space_label(obj, infos.get(obj.name, {}), area)
                     if room_labels:
+                        st_label = storey_of.get(obj.name)
                         try:
-                            anchor = _room_label_anchor(mesh, obj.matrix_world, _ROOM_LABEL_LIFT_M * uf,
-                                                        label_z.get(storey_of.get(obj.name)),
-                                                        label_fixed.get(storey_of.get(obj.name)))
+                            site = _room_label_site(mesh, obj.matrix_world, _ROOM_LABEL_LIFT_M * uf,
+                                                    label_z.get(st_label), label_fixed.get(st_label))
                         except Exception:
-                            anchor = None
-                        if anchor is not None:
+                            site = None
+                        text = _room_text(obj, infos.get(obj.name, {}), area)
+                        if site is not None and label_mat is not None and site[3] is not None:
+                            try:
+                                first, _sep, second = text.partition("\n")
+                                obst = _label_room_obstacles(label_obstacles.get(st_label, ()), site[3], site[4],
+                                                             site[2], uf)
+                                geom, how = _label_layout(first, second, site[3], site[:2], uf, obst)
+                                label3d = (geom, site[2], first, how)
+                            except Exception as exc:
+                                stats["warnings"].append(f"nom de pièce non dessiné ({name}), écrit en texte : {exc}")
+                        if label3d is None and site is not None:
                             # openskp écrit `point + leader` là où SketchUp lit le vecteur de la ligne de rappel
                             # (Text#vector, vérifié dans SketchUp 2027) : un décalage de -point donne un vecteur
                             # nul, soit l'étiquette posée sur son ancrage, sans ligne de rappel.
-                            p_in = tuple(c * k for c in anchor)
-                            label = (_su_lines(_room_text(obj, infos.get(obj.name, {}), area)), p_in,
-                                     tuple(-c for c in p_in))
+                            p_in = tuple(c * k for c in _site_local(obj.matrix_world, site))
+                            label = (_su_lines(text), p_in, tuple(-c for c in p_in))
                     if inset_bu > 0:
                         how, out = _inset_space(mesh, obj.matrix_world, inset_bu)
                         if how is None:
@@ -3582,6 +3998,25 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
                             stats["warnings"].append(f"nom de pièce non écrit en texte ({name}) : {exc}")
                 stats["groups"] += 1
                 stats["objects"] += 1
+                if label3d is not None:
+                    geom, z_label, first, how = label3d
+                    attrs = None
+                    if store_attributes:
+                        attrs = _clean_attrs({"role": "nom de pièce", "piece": name,
+                                              "ifc_guid": (infos.get(obj.name) or {}).get("ifc_guid", "")})
+                    try:
+                        nf = _write_room_label(builder, geom, z_label, k, label_mat, layer_for(obj), first, uf, attrs)
+                    except Exception as exc:
+                        nf = 0
+                        stats["warnings"].append(f"nom de pièce non dessiné ({name}) : {exc}")
+                    if nf:
+                        stats["room_labels"] = stats.get("room_labels", 0) + 1
+                        stats["room_labels_3d"] = stats.get("room_labels_3d", 0) + 1
+                        stats["label_faces"] = stats.get("label_faces", 0) + nf
+                        if how["deborde"]:
+                            stats.setdefault("room_labels_overflow", []).append(first)
+                        elif how["echelle"] < 1.0:
+                            stats.setdefault("room_labels_reduced", []).append(first)
             finally:
                 holder.to_mesh_clear()
                 if rebuilt is not None:
@@ -3735,6 +4170,11 @@ def _export_skp_impl(filepath, context, only_selected=True, use_components=True,
         stats["warnings"].append(
             f"{len(stats['spaces_not_inset'])} pièce(s) gardée(s) sans retrait (volume non fermé ou trop mince) : "
             f"{noms} ; leurs faces peuvent scintiller avec les sols et les murs dans SketchUp")
+    if stats.get("room_labels_overflow"):
+        noms = ", ".join(stats["room_labels_overflow"][:4]) + ("…" if len(stats["room_labels_overflow"]) > 4 else "")
+        stats["warnings"].append(
+            f"{len(stats['room_labels_overflow'])} nom(s) de pièce plus large(s) que leur pièce, même réduit(s) à "
+            f"60 % : {noms} ; à déplacer ou raccourcir dans SketchUp")
     if stats["faces"] > 500_000:
         stats["warnings"].append(
             f"modèle lourd ({stats['faces']} faces) : SketchUp devient lent au-delà de 500 000 faces ; "
@@ -3853,10 +4293,20 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
         default=True,
     )
     room_labels: BoolProperty(
-        name="Noms des pièces en texte",
+        name="Noms des pièces",
         description=(
-            "Pose dans chaque pièce un texte SketchUp avec son nom et sa surface (« Chambre », « 5,69 m² »), au point "
-            "le plus éloigné des murs. Il suit l'étiquette « Pièces - <niveau> » et se lit dans les scènes « Plan »"
+            "Pose dans chaque pièce son nom et sa surface (« Chambre », « 5,69 m² »), au cœur de la pièce. Ils suivent "
+            "l'étiquette « Pièces - <niveau> » et se lisent dans les scènes « Plan »"
+        ),
+        default=True,
+    )
+    room_labels_3d: BoolProperty(
+        name="Noms dessinés dans la pièce",
+        description=(
+            "Dessine les noms en lettres planes (DM Sans), centrés dans la pièce, hors des équipements, cloisons et "
+            "parois vitrées quand la place le permet, sur deux lignes, tournés ou réduits s'ils n'y tiennent pas : "
+            "ils gardent leur taille au zoom et sur une planche LayOut (15 cm de haut, 3 mm au 1/50). Sinon, texte "
+            "SketchUp de taille fixe à l'écran, qui part vers la droite de son point"
         ),
         default=True,
     )
@@ -3968,7 +4418,7 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
                 space_inset_mm=self.space_inset, space_area_in_name=self.space_area_in_name,
                 paint_back=self.paint_back, level_scenes=self.level_scenes, room_labels=self.room_labels,
                 soften_coplanar=self.soften_coplanar, geolocate=self.geolocate, plan_cut=self.plan_cut,
-                plan_cut_height=self.plan_cut_height,
+                plan_cut_height=self.plan_cut_height, room_labels_3d=self.room_labels_3d,
             )
         except Exception as exc:
             self.report({"ERROR"}, f"Export SKP impossible : {exc}")
@@ -3987,6 +4437,11 @@ class ARKEDIA_OT_export_skp(bpy.types.Operator, ExportHelper):
             h = f"{s['plan_cut']['hauteur_m']:.2f}".replace(".", ",")
             self.report({"INFO"}, f"Plan coupé à {h} m au-dessus du sol dans {len(s['plan_cut']['plans_m'])} "
                                   "scène(s) « Plan »")
+        if s.get("room_labels_3d"):
+            msg = f"{s['room_labels_3d']} nom(s) de pièce dessiné(s) dans leur pièce"
+            if s.get("room_labels_reduced"):
+                msg += f", dont {len(s['room_labels_reduced'])} réduit(s) pour y tenir"
+            self.report({"INFO"}, msg)
         if s.get("geo"):
             g = s["geo"]
             lat = f"{abs(g['latitude']):.4f}".replace(".", ",") + ("° N" if g["latitude"] >= 0 else "° S")

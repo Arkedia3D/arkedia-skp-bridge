@@ -1,5 +1,49 @@
 # Journal des modifications
 
+## 0.3.3, 30 octobre 2026 : noms des pièces dessinés dans la pièce
+
+Les noms des pièces de la 0.3.0 étaient des textes SketchUp. Un tel texte se dessine à l'écran : sa taille ne suit
+pas le zoom, il part vers la droite de son point d'ancrage et, vu de dessus, il déborde sur les murs des petites
+pièces. Sur une planche LayOut au 1/50, il garde aussi sa taille d'écran.
+
+### Export
+
+- Nouvelle option « Noms dessinés dans la pièce », active par défaut. Le nom et la surface de chaque pièce sont
+  dessinés en lettres planes (DM Sans Medium) dans un groupe « Nom de pièce - <nom> », rangé sur l'étiquette des
+  pièces de son niveau : capitales de 15 cm, soit 3 mm sur un plan au 1/50. Faces horizontales tournées vers le haut,
+  même matière bleu nuit des deux côtés, arêtes masquées. Le groupe se voit dans la scène « Plan » de son niveau,
+  sous la coupe, comme l'ancien texte.
+- Le bloc se pose au cœur de la pièce s'il y tient, sinon au point le plus proche où il tient. Il évite ce qui se voit
+  dans la pièce vue de dessus : sanitaires et bacs de douche, mobilier, parois vitrées, cloisons, portes, escaliers,
+  poteaux. Faute de place, le nom passe sur deux lignes, le bloc tourne d'un quart de tour (couloirs) ou rapetisse
+  jusqu'à 70 % ; s'il ne trouve toujours pas de place libre, il passe par-dessus les équipements, réduit au besoin
+  jusqu'à 60 %. Un nom qui déborde encore de sa pièce est signalé.
+- Le cœur de la pièce est son centre de gravité quand il est presque aussi loin des murs que le pôle
+  d'inaccessibilité : dans un couloir, le nom se pose au milieu et non à un bout. Le texte SketchUp, toujours
+  disponible en décochant l'option, en profite aussi.
+- Les contours des lettres (glyphes_dmsans.json, 44 Ko) viennent de la police DM Sans, sous licence SIL Open Font
+  License 1.1, jointe à l'extension (OFL_DMSans.txt). Un nom dessiné ajoute de 30 à 45 Ko au fichier.
+
+### Import
+
+- Un fichier dont le nombre de définitions est égal au numéro d'objet d'une étiquette ne s'ouvrait pas (« implausible
+  definition count ») : openskp lisait l'étiquette active comme une étiquette parente, puis le nombre de définitions
+  deux octets trop loin. Le cas d'essai `niveaux` y est tombé avec ses 16 groupes. Le correctif ne joue que le temps de
+  l'import.
+
+### Vérifications
+
+- Cas d'essai `niveaux` : un groupe de lettres par pièce, sur l'étiquette des pièces de son niveau, à 1,20 et
+  4,40 m, centré dans la pièce, faces tournées vers le haut, aucune arête visible, aucun texte SketchUp. Nouveau cas
+  `niveaux_texte` pour l'ancien texte. Les 15 cas passent.
+- Un appartement et une villa de trois niveaux réexportés depuis leur IFC, rouverts dans SketchUp 2027 : 7 et 27 noms
+  dessinés, chacun dans le sol de sa pièce, sous la coupe, visible dans la seule scène « Plan » de son niveau, aucune
+  arête visible, plus aucun texte SketchUp. Dans l'appartement, le hall se lit tourné d'un quart de tour, la salle
+  d'eau sur deux lignes et le placard en plus petit ; dans la villa, les noms des salles d'eau passent à côté des
+  parois vitrées et des bacs de douche qu'ils coupaient en texte. Bâti, pièces, surfaces et dimensions identiques à
+  la 0.3.2. Fichiers de 467 Ko et 2,4 Mo, contre 237 Ko et 1,2 Mo avec les textes.
+- Planche LayOut au 1/50 tirée des scènes « Plan » : les noms gardent leur taille et leur place sur le papier.
+
 ## 0.3.2, 30 octobre 2026 : ombres du lieu, plans coupés, scènes des anciennes versions
 
 Trois manques relevés en ouvrant nos exports dans SketchUp 2027. Le soleil était celui de Boulder, au Colorado, quel
